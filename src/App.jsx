@@ -1,15 +1,95 @@
 import { Routes, Route } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import routes from './routes';
-import Sidebar from './components/common/Sidebar';
-import Header from './components/common/Header';
+
+import { useState, useEffect } from 'react';
 
 function App() {
+  const [theme, setTheme] = useState('dark');
+
+  useEffect(() => {
+    document.documentElement.setAttribute(
+      'data-theme',
+      theme
+    );
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) =>
+      prev === 'dark' ? 'light' : 'dark'
+    );
+  };
+
   return (
     <div className="app-layout">
-      <Sidebar />
+      <aside className="sidebar">
+        <div className="sidebar-logo">
+          <h2>TradeFlow Wallet</h2>
+        </div>
 
-      <div className="main-content">
-        <Header />
+        <nav>
+          <NavLink
+            to="/"
+            className="sidebar-link"
+          >
+            Dashboard
+          </NavLink>
+
+          <NavLink
+            to="/portfolio"
+            className="sidebar-link"
+          >
+            Portfolio
+          </NavLink>
+
+          <NavLink
+            to="/transactions"
+            className="sidebar-link"
+          >
+            Transactions
+          </NavLink>
+
+          <NavLink
+            to="/explorer"
+            className="sidebar-link"
+          >
+            Explorer
+          </NavLink>
+
+          <NavLink
+            to="/staking"
+            className="sidebar-link"
+          >
+            Staking
+          </NavLink>
+
+          <NavLink
+            to="/harness"
+            className="sidebar-link"
+          >
+            Harness
+          </NavLink>
+
+          <NavLink
+            to="/settings"
+            className="sidebar-link"
+          >
+            Settings
+          </NavLink>
+        </nav>
+      </aside>
+
+      <main className="main-content">
+        <header className="header">
+          <h3>Blockchain Testing Framework</h3>
+
+          <button
+            className="theme-toggle"
+            onClick={toggleTheme}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+        </header>
 
         <div className="page-container">
           <Routes>
@@ -22,7 +102,7 @@ function App() {
             ))}
           </Routes>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

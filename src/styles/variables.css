@@ -1,19 +1,124 @@
+/* ============================================================
+   TRADEFLOW WALLET — CSS Variables & Theme System
+   ============================================================ */
+
 :root {
-  --font-family: 'Inter', sans-serif;
+  /* --- Typography --- */
+  --font-display: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
 
-  --sidebar-width: 260px;
-  --header-height: 72px;
+  /* --- Spacing Scale --- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
 
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 24px;
+  /* --- Border Radius --- */
+  --r-sm: 6px;
+  --r-md: 12px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-full: 9999px;
 
-  --transition: all 0.25s ease;
+  /* --- Transitions --- */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 0.15s;
+  --t-mid: 0.3s;
+  --t-slow: 0.5s;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.12);
+  /* --- Z-Index --- */
+  --z-base: 0;
+  --z-card: 10;
+  --z-overlay: 50;
+  --z-modal: 100;
+  --z-toast: 200;
+  --z-topbar: 300;
+}
 
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+/* ==================== DARK THEME (default) ==================== */
+[data-theme="dark"] {
+  --bg-base:      #0a0c10;
+  --bg-surface:   #111318;
+  --bg-elevated:  #181c24;
+  --bg-muted:     #1e2330;
+  --bg-glass:     rgba(17, 19, 24, 0.72);
+
+  --border:       rgba(255, 255, 255, 0.07);
+  --border-focus: rgba(82, 200, 170, 0.5);
+
+  --text-primary:   #f0f4f8;
+  --text-secondary: #8892a0;
+  --text-muted:     #4a5568;
+  --text-inverse:   #0a0c10;
+
+  --accent:         #52c8aa;
+  --accent-dim:     rgba(82, 200, 170, 0.15);
+  --accent-glow:    0 0 32px rgba(82, 200, 170, 0.25);
+
+  --accent2:        #e8a945;
+  --accent2-dim:    rgba(232, 169, 69, 0.12);
+
+  --success:        #4ade80;
+  --success-dim:    rgba(74, 222, 128, 0.12);
+  --warning:        #fbbf24;
+  --warning-dim:    rgba(251, 191, 36, 0.12);
+  --danger:         #f87171;
+  --danger-dim:     rgba(248, 113, 113, 0.12);
+
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 20px rgba(0,0,0,0.5);
+  --shadow-lg:  0 12px 48px rgba(0,0,0,0.6);
+  --shadow-glow: 0 0 40px rgba(82,200,170,0.12);
+
+  --nav-bg:     rgba(10, 12, 16, 0.92);
+  --scrollbar:  #1e2330;
+  --scrollbar-thumb: #2d3548;
+}
+
+/* ==================== LIGHT THEME ==================== */
+[data-theme="light"] {
+  --bg-base:      #f4f6f9;
+  --bg-surface:   #ffffff;
+  --bg-elevated:  #ffffff;
+  --bg-muted:     #edf0f5;
+  --bg-glass:     rgba(255, 255, 255, 0.80);
+
+  --border:       rgba(0, 0, 0, 0.08);
+  --border-focus: rgba(17, 120, 92, 0.4);
+
+  --text-primary:   #0f1923;
+  --text-secondary: #5a6478;
+  --text-muted:     #9aa3b2;
+  --text-inverse:   #ffffff;
+
+  --accent:         #11785c;
+  --accent-dim:     rgba(17, 120, 92, 0.10);
+  --accent-glow:    0 0 32px rgba(17, 120, 92, 0.18);
+
+  --accent2:        #b8742a;
+  --accent2-dim:    rgba(184, 116, 42, 0.10);
+
+  --success:        #16a34a;
+  --success-dim:    rgba(22, 163, 74, 0.10);
+  --warning:        #d97706;
+  --warning-dim:    rgba(217, 119, 6, 0.10);
+  --danger:         #dc2626;
+  --danger-dim:     rgba(220, 38, 38, 0.10);
+
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.07);
+  --shadow-md:  0 4px 20px rgba(0,0,0,0.09);
+  --shadow-lg:  0 12px 48px rgba(0,0,0,0.12);
+  --shadow-glow: 0 0 40px rgba(17,120,92,0.08);
+
+  --nav-bg:     rgba(244, 246, 249, 0.92);
+  --scrollbar:  #e2e8f0;
+  --scrollbar-thumb: #cbd5e1;
 }

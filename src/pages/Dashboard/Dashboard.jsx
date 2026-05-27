@@ -11,11 +11,27 @@ function Dashboard() {
       <div className="dashboard-grid">
         <WalletCard wallet={wallet} />
 
-        <div className="card">
-          <h3>Blockchain Status</h3>
-          <p>Network: Online</p>
-          <p>Consensus: Active</p>
-          <p>Validators: 12</p>
+        <div className="stats-grid">
+          <div className="card">
+            <h3>Total Balance</h3>
+            <div className="wallet-balance">
+              $103,400
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Staked Assets</h3>
+            <div className="wallet-balance">
+              $52,400
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Transactions</h3>
+            <div className="wallet-balance">
+              124
+            </div>
+          </div>
         </div>
       </div>
 
@@ -23,6 +39,7 @@ function Dashboard() {
 
       <BlockList blocks={blocks} />
     </div>
+    
   );
 }
 
