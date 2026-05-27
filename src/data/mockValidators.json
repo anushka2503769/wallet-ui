@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "name": "validator-alpha",
+    "uptime": "99.8%",
+    "stake": 420000,
+    "status": "ONLINE"
+  },
+  {
+    "id": 2,
+    "name": "validator-beta",
+    "uptime": "98.9%",
+    "stake": 310000,
+    "status": "ONLINE"
+  },
+  {
+    "id": 3,
+    "name": "validator-gamma",
+    "uptime": "97.5%",
+    "stake": 280000,
+    "status": "SYNCING"
+  }
+]

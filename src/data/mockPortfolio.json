@@ -1,0 +1,27 @@
+{
+  "totalValue": 103400,
+  "monthlyGrowth": 12.4,
+  "stakedValue": 52400,
+  "assets": [
+    {
+      "name": "TFLOW",
+      "holdings": 1200,
+      "value": 45000
+    },
+    {
+      "name": "USDC",
+      "holdings": 8400,
+      "value": 8400
+    },
+    {
+      "name": "BTC",
+      "holdings": 0.5,
+      "value": 32000
+    },
+    {
+      "name": "ETH",
+      "holdings": 4.2,
+      "value": 18000
+    }
+  ]
+}

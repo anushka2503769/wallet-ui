@@ -1,0 +1,32 @@
+[
+  {
+    "blockNumber": 12045,
+    "hash": "0xA8123BC98DEFF",
+    "previousHash": "0x99123ABBCDD22",
+    "validator": "validator-alpha",
+    "transactions": 14,
+    "gasUsed": 32421,
+    "status": "FINALIZED",
+    "timestamp": "2026-05-27T11:20:00Z"
+  },
+  {
+    "blockNumber": 12046,
+    "hash": "0xBB119D22FFEAC",
+    "previousHash": "0xA8123BC98DEFF",
+    "validator": "validator-beta",
+    "transactions": 11,
+    "gasUsed": 28761,
+    "status": "FINALIZED",
+    "timestamp": "2026-05-27T11:22:00Z"
+  },
+  {
+    "blockNumber": 12047,
+    "hash": "0xCA9201AABBCCD",
+    "previousHash": "0xBB119D22FFEAC",
+    "validator": "validator-gamma",
+    "transactions": 8,
+    "gasUsed": 22410,
+    "status": "PENDING",
+    "timestamp": "2026-05-27T11:24:00Z"
+  }
+]

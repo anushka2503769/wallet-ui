@@ -1,0 +1,46 @@
+[
+  {
+    "id": 1,
+    "hash": "0xA1B2C3D4E5F6",
+    "type": "SEND",
+    "amount": 1250,
+    "status": "CONFIRMED",
+    "block": 12041,
+    "timestamp": "2026-05-27T10:15:00Z",
+    "from": "0x7B3A4CFA9128A8D19B3A",
+    "to": "0xFF21BC98DA7712"
+  },
+  {
+    "id": 2,
+    "hash": "0xF7E8D9C0B1A2",
+    "type": "RECEIVE",
+    "amount": 5400,
+    "status": "CONFIRMED",
+    "block": 12042,
+    "timestamp": "2026-05-27T10:30:00Z",
+    "from": "0xAB82DD9912FFAA",
+    "to": "0x7B3A4CFA9128A8D19B3A"
+  },
+  {
+    "id": 3,
+    "hash": "0x8899AABBCCDD",
+    "type": "STAKE",
+    "amount": 20000,
+    "status": "PENDING",
+    "block": 12043,
+    "timestamp": "2026-05-27T11:00:00Z",
+    "from": "0x7B3A4CFA9128A8D19B3A",
+    "to": "validator-alpha"
+  },
+  {
+    "id": 4,
+    "hash": "0xCCDD11223344",
+    "type": "SEND",
+    "amount": 780,
+    "status": "FAILED",
+    "block": 12044,
+    "timestamp": "2026-05-27T11:12:00Z",
+    "from": "0x7B3A4CFA9128A8D19B3A",
+    "to": "0x9988ABCD1122"
+  }
+]
