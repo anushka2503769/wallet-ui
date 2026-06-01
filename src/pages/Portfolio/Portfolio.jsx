@@ -1,6 +1,6 @@
 import portfolioData from '../../data/mockPortfolio.json';
 import PortfolioChart from '../../components/charts/PortfolioChart';
-import { TrendingUp, DollarSign, PieChart, Shield } from 'lucide-react';
+import { TrendingUp, DollarSign, Shield } from 'lucide-react';
 
 function Portfolio() {
   const totalValue = portfolioData.assets.reduce(
@@ -8,94 +8,110 @@ function Portfolio() {
     0
   );
   const totalStaked = 52400;
-  const monthlyGrowth = 12.4;
 
   return (
-    <div className="portfolio-page">
+    <div className="page-container">
+      {/* Page Heading Framework */}
       <div className="page-header">
-        <div>
-          <h2>Portfolio Overview</h2>
-          <p>Monitor your tokenized assets and blockchain investments.</p>
+        <h2>Portfolio Overview</h2>
+        <p>Monitor your tokenized assets and blockchain investments.</p>
+      </div>
+
+      {/* Grid for core wallet matrix */}
+      <div className="stats-grid">
+        <div className="card flex align-center gap-4">
+          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
+            <DollarSign size={22} />
+          </div>
+          <div className="stat-block">
+            <span className="stat-label">Total Portfolio Value</span>
+            <span className="stat-value">${totalValue.toLocaleString()}</span>
+          </div>
+        </div>
+
+        <div className="card flex align-center gap-4">
+          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
+            <Shield size={22} />
+          </div>
+          <div className="stat-block">
+            <span className="stat-label">Total Staked</span>
+            <span className="stat-value">${totalStaked.toLocaleString()}</span>
+          </div>
+        </div>
+
+        <div className="card flex align-center gap-4">
+          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
+            <TrendingUp size={22} />
+          </div>
+          <div className="stat-block">
+            <span className="stat-label">Total Assets</span>
+            <span className="stat-value">{portfolioData.assets.length}</span>
+          </div>
         </div>
       </div>
 
-      {/* Grid for top statistics */}
-      <div className="stats-grid">
-        <div className="card stat-card">
-          <div className="stat-icon">
-            <DollarSign size={22} />
-          </div>
-          <div>
-            <h4>Total Portfolio Value</h4>
-            <h2>${totalValue.toLocaleString()}</h2>
+      {/* Main Grid: Data Visualization & Breakdown mapping */}
+      <div className="grid-auto">
+      
+        <div className="card" style={{ height: '380px', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', inset: '24px', minWidth: 0, minHeight: 0 }}>
+            <PortfolioChart data={portfolioData.assets} />
           </div>
         </div>
-
-        <div className="card stat-card">
-          <div className="stat-icon">
-            <Shield size={22} />
-          </div>
-          <div>
-            <h4>Total Staked</h4>
-            <h2>${totalStaked.toLocaleString()}</h2>
-          </div>
-        </div>
-
-        <div className="card stat-card">
-          <div className="stat-icon">
-            <TrendingUp size={22} />
-          </div>
-          <div>
-            <h4>Total Assets</h4>
-            <h2>{portfolioData.assets.length}</h2>
-          </div>
-        </div>
-      </div> {/* Fixed: Properly closed stats-grid here */}
-
-      {/* Main layout grid for charts and allocation */}
-      <div className="portfolio-main-grid">
-        <PortfolioChart data={portfolioData.assets} />
         
-        <div className="card allocation-card">
+        <div className="card flex col gap-4">
           <h3>Asset Allocation</h3>
-          <div className="allocation-list">
+          <div className="flex col gap-4">
             {portfolioData.assets.map((asset) => {
               const percentage = ((asset.value / totalValue) * 100).toFixed(1);
               return (
-                <div className="allocation-item" key={asset.name}>
-                  <div>
-                    <h4>{asset.name}</h4>
-                    <p>{asset.holdings} Holdings</p>
+                <div className="flex col gap-2" key={asset.name}>
+                  <div className="flex-between">
+                    <div>
+                      <span className="text-sm" style={{ fontWeight: 600 }}>{asset.name}</span>
+                      <p className="text-xs text-muted">{asset.holdings} Holdings</p>
+                    </div>
+                    <div className="text-right" style={{ textAlign: 'right' }}>
+                      <strong className="text-sm">${asset.value.toLocaleString()}</strong>
+                      <span className="text-xs text-accent mt-2" style={{ display: 'block', fontWeight: 600 }}>{percentage}%</span>
+                    </div>
                   </div>
-                  <div className="allocation-right">
-                    <strong>${asset.value.toLocaleString()}</strong>
-                    <span>{percentage}%</span>
+                  <div className="progress">
+                    <div className="progress-fill" style={{ width: `${percentage}%` }}></div>
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
-      </div> {/* Fixed: Properly closed portfolio-main-grid here */}
-
-      {/* Individual assets grid */}
-      <div className="asset-grid">
+      </div>
+              
+      {/* Individual asset grid with structural modifiers */}
+      <div className="grid-auto">
         {portfolioData.assets.map((asset) => (
-          <div className="card asset-card" key={asset.name}>
-            <div className="asset-top">
+          <div className="card flex col gap-4" key={asset.name}>
+            <div className="flex-between">
               <div>
-                <h3>{asset.name}</h3>
-                <p>{asset.holdings} Holdings</p>
+                <h3 className="text-accent">{asset.name}</h3>
+                <p className="text-xs text-muted">{asset.holdings} Holdings</p>
               </div>
-              <div className="asset-growth positive">
+              <span className="badge badge-success stat-up">
                 +4.2%
-              </div>
+              </span>
             </div>
-            <div className="asset-value">
-              ${asset.value.toLocaleString()}
+            
+            <div className="stat-block">
+              <span className="stat-label">Asset Valuation</span>
+              <span className="stat-value" style={{ fontSize: '1.75rem' }}>
+                ${asset.value.toLocaleString()}
+              </span>
             </div>
-            <div className="asset-footer">
-              <span>Network: TradeFlow Testnet</span>
+
+            <div className="divider" style={{ margin: 'var(--sp-2) 0' }}></div>
+
+            <div className="flex-between text-xs text-muted">
+              <span>Network</span>
+              <span className="font-mono text-accent">TradeFlow Testnet</span>
             </div>
           </div>
         ))}
