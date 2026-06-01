@@ -1,6 +1,7 @@
 import Dashboard from './pages/Dashboard/Dashboard';
 import Portfolio from './pages/Portfolio/Portfolio';
 import Transactions from './pages/Transactions/Transactions';
+import SendReceive from './pages/SendReceive/SendReceive'
 import Explorer from './pages/Explorer/Explorer';
 import Staking from './pages/Staking/Staking';
 import Harness from './pages/Harness/Harness';
@@ -18,6 +19,10 @@ const routes = [
   {
     path: '/transactions',
     element: <Transactions />
+  },
+  {
+    path: '/sendreceive',
+    element: <SendReceive />
   },
   {
     path: '/explorer',

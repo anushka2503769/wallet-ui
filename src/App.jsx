@@ -50,6 +50,13 @@ function App() {
           </NavLink>
 
           <NavLink
+            to="/sendreceive"
+            className="sidebar-link"
+          >
+            Send & Receive
+          </NavLink>
+
+          <NavLink
             to="/explorer"
             className="sidebar-link"
           >
