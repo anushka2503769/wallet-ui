@@ -3,13 +3,16 @@ import WalletCard from '../../components/wallet/WalletCard';
 import TransactionTable from '../../components/tables/TransactionTable';
 import BlockList from '../../components/blockchain/BlockList';
 
+import { useNavigate } from 'react-router-dom';
+import routes from '../../routes';
+
 import portfolioData from '../../data/mockPortfolio.json';
 import transactionData from '../../data/mockTransactions.json';
 import blockData from '../../data/mockBlocks.json';
 
 function Dashboard() {
   const [copied, setCopied] = useState(false);
-
+  const navigate = useNavigate();
   const wallet = {
     balance: portfolioData.totalValue,
     address: '0x7A91E4B6F93D5A4E9A2F1C83D4AB6C21F5D8E9A7'
@@ -82,13 +85,25 @@ function Dashboard() {
 
       {/* Transaction Control Actions Utility Row */}
       <div className="card flex gap-4">
-        <button className="cute-button" style={{ flex: 1 }}>
+        <button 
+          className="cute-button" 
+          style={{ flex: 1 }} 
+          onClick={() => navigate('/sendreceive')}
+        >
           Send
         </button>
-        <button className="cute-button" style={{ flex: 1 }}>
+        <button 
+          className="cute-button" 
+          style={{ flex: 1 }} 
+          onClick={() => navigate('/sendreceive')}
+        >
           Receive
         </button>
-        <button className="cute-button" style={{ flex: 1 }}>
+        <button 
+          className="cute-button" 
+          style={{ flex: 1 }} 
+          onClick={() => navigate('/staking')}
+        >
           Stake
         </button>
       </div>

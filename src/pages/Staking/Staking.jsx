@@ -2,6 +2,40 @@ import { useState } from "react";
 
 function Staking() {
   const [amount, setAmount] = useState("");
+  
+  // Track metrics in component state to reflect updates dynamically
+  const [totalStaked, setTotalStaked] = useState(12500);
+  const [pendingRewards, setPendingRewards] = useState(312);
+
+  // Initialize event history list inside the state framework
+  const [events, setEvents] = useState([
+    { id: 1, date: "2025-08-10", action: "Reward", icon: "⚡", iconColor: "var(--success)", amount: 75, status: "Completed" },
+    { id: 2, date: "2025-08-01", action: "Stake", icon: "↑", iconColor: "var(--accent)", amount: 5000, status: "Completed" }
+  ]);
+
+  const handleSimulateStake = () => {
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) return;
+
+    // Get today's local date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+
+    // Create a new event node object
+    const newEvent = {
+      id: Date.now(),
+      date: today,
+      action: "Stake",
+      icon: "↑",
+      iconColor: "var(--accent)",
+      amount: numericAmount,
+      status: "Completed"
+    };
+
+    // Update state variables to trigger page re-render instantly
+    setTotalStaked(prev => prev + numericAmount);
+    setEvents(prevEvents => [newEvent, ...prevEvents]);
+    setAmount(""); // Clear form input text box
+  };
 
   return (
     <div className="page-container">
@@ -18,7 +52,7 @@ function Staking() {
         <div className="card">
           <div className="stat-block">
             <span className="stat-label">Total Staked</span>
-            <div className="wallet-balance">12,500 TFC</div>
+            <div className="wallet-balance">{totalStaked.toLocaleString()} TFC</div>
           </div>
         </div>
 
@@ -32,7 +66,7 @@ function Staking() {
         <div className="card">
           <div className="stat-block">
             <span className="stat-label">Pending Rewards</span>
-            <div className="wallet-balance">312 TFC</div>
+            <div className="wallet-balance">{pendingRewards.toLocaleString()} TFC</div>
           </div>
         </div>
       </div>
@@ -54,7 +88,12 @@ function Staking() {
             />
           </div>
 
-          <button className="cute-button btn-full" type="button" disabled={!amount}>
+          <button 
+            className="cute-button btn-full" 
+            type="button" 
+            disabled={!amount}
+            onClick={handleSimulateStake}
+          >
             Simulate Stake
           </button>
         </div>
@@ -104,27 +143,20 @@ function Staking() {
           </thead>
 
           <tbody>
-            <tr>
-              <td className="font-mono text-muted">2025-08-01</td>
-              <td style={{ fontWeight: 500 }}>
-                <span className="text-accent">↑</span> Stake
-              </td>
-              <td className="font-mono" style={{ fontWeight: 600 }}>5,000 TFC</td>
-              <td>
-                <span className="badge badge-success">Completed</span>
-              </td>
-            </tr>
-
-            <tr>
-              <td className="font-mono text-muted">2025-08-10</td>
-              <td style={{ fontWeight: 500 }}>
-                <span style={{ color: 'var(--success)' }}>⚡</span> Reward
-              </td>
-              <td className="font-mono" style={{ fontWeight: 600 }}>75 TFC</td>
-              <td>
-                <span className="badge badge-success">Completed</span>
-              </td>
-            </tr>
+            {events.map((event) => (
+              <tr key={event.id}>
+                <td className="font-mono text-muted">{event.date}</td>
+                <td style={{ fontWeight: 500 }}>
+                  <span style={{ color: event.iconColor }}>{event.icon}</span> {event.action}
+                </td>
+                <td className="font-mono" style={{ fontWeight: 600 }}>
+                  {event.amount.toLocaleString()} TFC
+                </td>
+                <td>
+                  <span className="badge badge-success">{event.status}</span>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
