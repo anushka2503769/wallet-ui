@@ -4,6 +4,7 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@300;400;500&display=swap');
 @import 'variables.css';
+@import 'accessibility.css';
 
 /* ---- Reset ---- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -419,7 +420,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
 .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-6); }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-6); }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-5); }
-.grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-6); }
+.grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: var(--sp-6); }
 .flex { display: flex; }
 .flex-center { display: flex; align-items: center; justify-content: center; }
 .flex-between { display: flex; align-items: center; justify-content: space-between; }
@@ -646,5 +647,75 @@ code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
   cursor: pointer;
 
   font-size: 1rem;
+}
+
+.wallet-address {
+  font-family: monospace;
+  font-size: 1rem;
+  margin: 12px 0;
+  word-break: break-all;
+}
+
+.cute-button {
+  background: linear-gradient(
+    135deg,
+    #52c8aa,
+    #4ebea2
+  );
+
+  color: white;
+
+  border: none;
+
+  padding: 12px 20px;
+
+  border-radius: 14px;
+
+  font-size: 0.95rem;
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition: all 0.25s ease;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cute-button:hover {
+  transform: translateY(-2px);
+
+  box-shadow:
+    0 8px 20px rgba(59, 237, 246, 0.35);
+}
+
+.cute-button:active {
+  transform: translateY(1px);
+}
+
+.cute-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cute-button-secondary {
+  background: transparent;
+
+  color: var(--text-primary);
+
+  border: 1px solid var(--border-color);
+
+  padding: 12px 20px;
+
+  border-radius: 14px;
+
+  cursor: pointer;
+
+  transition: all 0.2s ease;
+}
+
+.cute-button-secondary:hover {
+  background: rgba(255,255,255,0.05);
 }
 
