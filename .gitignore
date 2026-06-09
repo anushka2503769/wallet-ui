@@ -3,3 +3,13 @@ dist
 .env
 .vscode
 .DS_Store
+target
+**/target
+rust-blockchain/target
+rust-blockchain/blockchain_ledger_db
+.idea
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
