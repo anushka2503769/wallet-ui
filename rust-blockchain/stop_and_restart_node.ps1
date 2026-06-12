@@ -1,4 +1,5 @@
-Set-Location -LiteralPath 'C:\Users\lumji\Desktop\Github\wallet-ui\rust-blockchain'
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
+Set-Location -LiteralPath $scriptDir
 $procs = Get-Process -Name blockchain-node -ErrorAction SilentlyContinue
 if ($procs) {
     foreach ($p in $procs) {
@@ -9,7 +10,7 @@ if ($procs) {
     Write-Host 'No blockchain-node process found'
 }
 Start-Sleep -Milliseconds 500
-$lockPath = '.\\blockchain_ledger_db\\LOCK'
+$lockPath = Join-Path $scriptDir 'blockchain_ledger_db\LOCK'
 if (Test-Path $lockPath) {
     Write-Host 'Removing LOCK...'
     Remove-Item -Force $lockPath -ErrorAction SilentlyContinue
@@ -22,4 +23,4 @@ if (Test-Path $lockPath) {
     Write-Host 'No LOCK file'
 }
 Write-Host 'Starting node...'
-& .\run_node_with_vcvars.cmd
+& (Join-Path $scriptDir 'run_node_with_vcvars.cmd')

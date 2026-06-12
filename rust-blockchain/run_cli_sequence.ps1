@@ -1,7 +1,48 @@
-Set-Location -LiteralPath 'C:\Users\lumji\Desktop\Github\wallet-ui\rust-blockchain'
-Write-Host 'Running CLI: deploy -> mine -> query_state'
+# Use the script directory so the path stays portable in Git
+if ($PSScriptRoot) {
+    $scriptRoot = $PSScriptRoot
+} else {
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
+}
+Set-Location -LiteralPath $scriptRoot
+Write-Host "Running CLI in: $scriptRoot - deploy -> mine -> query_state"
+# Helper: locate built CLI or fall back to `cargo run`
+function Invoke-BlockchainCli {
+    param([Parameter(ValueFromRemainingArguments=$true)] [string[]]$Args)
+
+    $candidates = @(
+        "$scriptRoot\target\debug\blockchain-cli.exe",
+        "$scriptRoot\target\debug\blockchain_cli.exe",
+        "$scriptRoot\target\debug\deps\blockchain-cli.exe",
+        "$scriptRoot\target\debug\deps\blockchain_cli.exe"
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) {
+            Write-Host "Using CLI binary: $p"
+            return & $p @Args 2>&1
+        }
+    }
+
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        Write-Host "CLI binary not found; running: cargo run --bin blockchain-cli -- $($Args -join ' ')"
+        # Run cargo, merge stderr but then filter out cargo's build lines
+        $output = & cargo run --bin blockchain-cli -- @Args 2>&1
+        # Keep only lines that look like JSON (start with '{' or '[' after whitespace)
+        $jsonLines = $output | Where-Object { $_ -match '^\s*[\{\[]' }
+        if ($jsonLines) {
+            return $jsonLines
+        } else {
+            # Fallback: return all output (maybe the CLI didn't print JSON)
+            return $output
+        }
+    }
+
+    Write-Host "CLI binary not found and 'cargo' is not available. Searched: $($candidates -join ', ')"
+    exit 1
+}
+
 # Deploy
-$outLines = & .\target\debug\blockchain-cli.exe deploy --hex-bytecode deadbeef --method init 2>&1
+$outLines = Invoke-BlockchainCli deploy --hex-bytecode deadbeef --method init
 $out = $outLines -join "`n"
 Write-Host '== DEPLOY OUTPUT =='
 Write-Host $out
@@ -23,13 +64,13 @@ if ($idx -ge 0) {
 }
 
 # Mine
-$mineLines = & .\target\debug\blockchain-cli.exe mine 2>&1
+$mineLines = Invoke-BlockchainCli mine
 $mineOut = $mineLines -join "`n"
 Write-Host '== MINE OUTPUT =='
 Write-Host $mineOut
 
 # Query State: contract id 'contract' and key slot txid
-$queryLines = & .\target\debug\blockchain-cli.exe query-state --contract-id contract --key-slot $txid 2>&1
+$queryLines = Invoke-BlockchainCli query-state --contract-id contract --key-slot $txid
 $queryOut = $queryLines -join "`n"
 Write-Host '== QUERY OUTPUT =='
 Write-Host $queryOut

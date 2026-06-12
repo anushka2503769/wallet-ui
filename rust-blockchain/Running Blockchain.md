@@ -36,6 +36,38 @@ See the frontend scripts in [package.json](package.json#L1).
 
 The Rust project is in the `rust-blockchain` folder and provides two binaries: `blockchain-node` (HTTP node) and `blockchain-cli` (command-line helper). See [rust-blockchain/Cargo.toml](rust-blockchain/Cargo.toml#L1).
 
+**Run this first (quick start)**
+
+If you just want to get the node and CLI running quickly for local testing, follow these steps from the repository root.
+
+1. Start the Rust node using an in-memory store (avoids native RocksDB issues) REQUIRES POWERSHELL :
+
+```powershell
+cd rust-blockchain
+# Starts the node with an ephemeral in-memory DB useful for local testing
+cmd /C "set USE_IN_MEMORY_DB=1&& cargo run --bin blockchain-node"
+```
+
+2. In a new terminal, run the automated CLI sequence (deploy -> mine -> query):
+
+```powershell
+cd rust-blockchain
+.\run_cli_sequence.ps1
+```
+
+This sequence will try to locate a built `blockchain-cli` binary under `target\debug` and fall back to `cargo run --bin blockchain-cli` if it cannot find an executable.
+
+Notes:
+- If you later want to reproduce the native RocksDB behavior, stop the in-memory node and run the node normally (may crash on systems with native library mismatches):
+
+```powershell
+cd rust-blockchain
+cargo run --bin blockchain-node
+```
+
+- To build the CLI binary in advance: `cargo build --bin blockchain-cli`.
+
+
 Recommended (Windows / MSVC): use the provided helper scripts which set up the MSVC environment and `LIBCLANG_PATH` for you.
 
 1. Build (from repo root or inside `rust-blockchain`):
