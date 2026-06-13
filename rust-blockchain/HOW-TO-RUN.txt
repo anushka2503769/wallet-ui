@@ -1,0 +1,7 @@
+Ensure you have cd into rust-blockchain before proceeding
+
+cargo run --bin blockchain-node
+cargo run --bin blockchain-cli deploy -b deadbeef -m init
+cargo run --bin blockchain-cli mine
+cargo run --bin blockchain-cli query-state --contract-id <txid> --key-slot anything
+(query rn only returns 1 to show that contract ID exists)
