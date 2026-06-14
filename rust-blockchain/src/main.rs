@@ -4,6 +4,30 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::path::Path;
+use rocksdb::{DB, Options};
+use std::any::Any;
+
+use async_trait::async_trait;
+use datafusion::arrow::array::{StringArray, UInt64Array, Int64Array};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::TableProvider;
+use datafusion::error::Result;
+use datafusion::catalog::Session;
+use datafusion::execution::context::SessionState;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::logical_expr::{Expr, TableType};
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use futures::stream;
+use serde_json::Value;
+use serde_json::json;
+
+use datafusion::prelude::*;
 
 // ===================== DATA =====================
 
@@ -47,18 +71,28 @@ pub struct Block {
     pub hash: String,
 }
 
-// ===================== ENGINE =====================
+#[derive(Deserialize)]
+struct SqlRequest {
+    sql: String,
+}
 
+// ===================== ENGINE =====================
+#[derive(Debug)]
 pub struct BlockchainEngine {
     pub mempool: Mutex<Vec<Transaction>>,
-    pub state: Mutex<HashMap<String, Vec<u8>>>,
+    pub db: DB,
 }
 
 impl BlockchainEngine {
-    pub fn new() -> Self {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+
+        let db = DB::open(&opts, path).expect("Failed to open RocksDB");
+
         let engine = Self {
             mempool: Mutex::new(vec![]),
-            state: Mutex::new(HashMap::new()),
+            db,
         };
 
         // genesis block
@@ -78,48 +112,274 @@ impl BlockchainEngine {
         engine
     }
 
-    pub fn put_state(&self, key: &str, value: i32) {
-        self.state
-            .lock()
-            .unwrap()
-            .insert(key.to_string(), value.to_string().into_bytes());
-    }
-
     pub fn get_state(&self, key: &str) -> i32 {
-        self.state
-            .lock()
-            .unwrap()
-            .get(key)
-            .and_then(|b| String::from_utf8(b.clone()).ok())
-            .and_then(|s| s.parse().ok())
+        let db_key = format!("state:{}", key);
+
+        self.db
+            .get(db_key.as_bytes())
+            .ok()
+            .flatten()
+            .and_then(|v| String::from_utf8(v.to_vec()).ok())
+            .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(0)
     }
 
+    pub fn put_state(&self, key: &str, value: i32) {
+        let db_key = format!("state:{}", key);
+
+        self.db
+            .put(db_key.as_bytes(), value.to_string().as_bytes())
+            .expect("Failed to write state");
+    }
+
     pub fn write_block(&self, block: &Block) {
-        let mut store = self.state.lock().unwrap();
+        let key = format!("block_{}", block.index);
+        let value = serde_json::to_vec(block).unwrap();
 
-        store.insert(
-            format!("block_{}", block.index),
-            serde_json::to_vec(block).unwrap(),
-        );
+        self.db.put(key, value).unwrap();
+        self.db
+            .put("latest_index", block.index.to_string())
+            .unwrap();
+    }
 
-        store.insert(
-            "latest_index".to_string(),
-            block.index.to_string().into_bytes(),
-        );
+    pub fn load_blocks(&self) -> Vec<Block> {
+        let mut blocks: Vec<Block> = vec![];
+
+        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+
+        for item in iter {
+            let (key, value) = item.unwrap();
+
+            if key.starts_with(b"block_") {
+                if let Ok(block) = serde_json::from_slice::<Block>(&value) {
+                    blocks.push(block);
+                }
+            }
+        }
+
+        blocks.sort_by_key(|b| b.index);
+        blocks
     }
 
     pub fn get_latest_block(&self) -> Option<Block> {
-        let store = self.state.lock().unwrap();
+        let index = self.db.get("latest_index").ok()??;
+        let index_str = String::from_utf8(index).ok()?;
 
-        let index_bytes = store.get("latest_index")?;
-        let index_str = String::from_utf8(index_bytes.clone()).ok()?;
+        let block = self.db.get(format!("block_{}", index_str)).ok()??;
+        serde_json::from_slice(&block).ok()
+    }
 
-        let block_bytes = store.get(&format!("block_{}", index_str))?;
+}
 
-        serde_json::from_slice(block_bytes).ok()
+// =========== Blocks Table Provider for DataFusion ============
+
+#[derive(Debug, Clone)]
+pub struct BlocksTableProvider {
+    schema: SchemaRef,
+    engine: Arc<BlockchainEngine>,
+}
+
+// Implement a custom TableProvider for the blocks data
+impl BlocksTableProvider {
+    pub fn new(engine: Arc<BlockchainEngine>) -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("index", DataType::UInt64, false),
+            Field::new("timestamp", DataType::Int64, false),
+            Field::new("tx_count", DataType::UInt64, false),
+            Field::new("previous_hash", DataType::Utf8, false),
+            Field::new("hash", DataType::Utf8, false),
+            Field::new("nonce", DataType::UInt64, false),
+        ]));
+
+        Self { schema, engine }
     }
 }
+
+// Provide rows for the blocks table
+#[async_trait]
+impl TableProvider for BlocksTableProvider {
+    fn as_any(&self) -> &dyn Any { self }
+    fn schema(&self) -> SchemaRef { self.schema.clone() }
+    fn table_type(&self) -> TableType { TableType::Base }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(BlocksExecutionPlan::new(
+            self.schema.clone(),
+            self.engine.clone(),
+        )))
+    }
+}
+
+// Custom execution plan to convert the blocks data into record batches for DataFusion
+#[derive(Debug, Clone)]
+pub struct BlocksExecutionPlan {
+    schema: SchemaRef,
+    engine: Arc<BlockchainEngine>,
+    properties: PlanProperties,
+}
+
+// This execution plan will be responsible for converting the in-memory blocks data into Arrow record batches
+impl BlocksExecutionPlan {
+    pub fn new(schema: SchemaRef, engine: Arc<BlockchainEngine>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        );
+        Self { schema, engine, properties }
+    }
+}
+
+impl DisplayAs for BlocksExecutionPlan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "BlocksExecutionPlan")
+    }
+}
+
+// Implement the ExecutionPlan trait to allow DataFusion to execute queries against the blocks data
+impl ExecutionPlan for BlocksExecutionPlan {
+    fn as_any(&self) -> &dyn Any { self }
+    fn schema(&self) -> SchemaRef { self.schema.clone() }
+    fn properties(&self) -> &PlanProperties { &self.properties }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn name(&self) -> &str {
+        "BlocksExecutionPlan"
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+
+        let blocks = self.engine.load_blocks();
+
+        let indices: Vec<u64> = blocks.iter().map(|b| b.index).collect();
+        let timestamps: Vec<i64> = blocks.iter().map(|b| b.timestamp).collect();
+        let tx_counts: Vec<u64> = blocks.iter().map(|b| b.transactions.len() as u64).collect();
+        let prev_hashes: Vec<&str> = blocks.iter().map(|b| b.previous_hash.as_str()).collect();
+        let hashes: Vec<&str> = blocks.iter().map(|b| b.hash.as_str()).collect();
+        let nonces: Vec<u64> = blocks.iter().map(|b| b.nonce).collect();
+
+        let batch = RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(indices)),
+                Arc::new(Int64Array::from(timestamps)),
+                Arc::new(UInt64Array::from(tx_counts)),
+                Arc::new(StringArray::from(prev_hashes)),
+                Arc::new(StringArray::from(hashes)),
+                Arc::new(UInt64Array::from(nonces)),
+            ],
+        )?;
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream::iter(vec![Ok(batch)]),
+        )))
+    }
+}
+
+
+// Convert RecordBatches to JSON rows for API responses
+fn batches_to_json(batches: &[RecordBatch]) -> Value {
+    let mut rows = vec![];
+
+    for batch in batches {
+        let schema = batch.schema();
+        let cols = batch.columns();
+        let num_rows = batch.num_rows();
+
+        for row in 0..num_rows {
+            let mut obj = serde_json::Map::new();
+
+            for (i, field) in schema.fields().iter().enumerate() {
+                let array = cols[i].as_ref();
+
+                let value = match array.data_type() {
+                    datafusion::arrow::datatypes::DataType::UInt64 => {
+                        let arr = array
+                            .as_any()
+                            .downcast_ref::<datafusion::arrow::array::UInt64Array>()
+                            .unwrap();
+                        json!(arr.value(row))
+                    }
+
+                    datafusion::arrow::datatypes::DataType::Int64 => {
+                        let arr = array
+                            .as_any()
+                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                            .unwrap();
+                        json!(arr.value(row))
+                    }
+
+                    datafusion::arrow::datatypes::DataType::Utf8 => {
+                        let arr = array
+                            .as_any()
+                            .downcast_ref::<datafusion::arrow::array::StringArray>()
+                            .unwrap();
+                        json!(arr.value(row))
+                    }
+
+                    _ => Value::Null,
+                };
+
+                obj.insert(field.name().clone(), value);
+            }
+
+            rows.push(json!(obj));
+        }
+    }
+
+    json!(rows)
+}
+
+// ==================== Query Engine ====================
+
+// QueryEngine is responsible for registering the custom table provider and executing SQL queries against it
+pub struct QueryEngine {
+    pub ctx: SessionContext,
+    pub engine: Arc<BlockchainEngine>,
+}
+
+impl QueryEngine {
+    pub fn new(engine: Arc<BlockchainEngine>) -> Self {
+        Self { ctx: SessionContext::new(), engine }
+    }
+
+    pub fn reload_blocks_table(&self) -> Result<()> {
+        let provider = Arc::new(BlocksTableProvider::new(self.engine.clone()));
+
+        let _ = self.ctx.deregister_table("blocks");
+        self.ctx.register_table("blocks", provider)?;
+
+        Ok(())
+    }
+
+    pub async fn run_query(
+        &self,
+        sql: &str,
+    ) -> Result<Vec<RecordBatch>>
+    {
+        let df = self.ctx.sql(sql).await?;
+
+        df.collect().await
+    }
+}
+
 
 // ===================== CONTRACT EXECUTION =====================
 
@@ -134,6 +394,7 @@ fn execute_contract(engine: &BlockchainEngine, tx: &Transaction) -> Result<(), &
 
 struct AppState {
     engine: Arc<BlockchainEngine>,
+    query_engine: Arc<QueryEngine>,
 }
 
 // ===================== ENDPOINTS =====================
@@ -210,7 +471,12 @@ async fn mine_block(data: web::Data<AppState>) -> impl Responder {
     };
 
     data.engine.write_block(&block);
-    pool.clear();
+    let blocks =
+        data.engine.load_blocks();
+
+    data.query_engine.reload_blocks_table()
+        .map_err(|e| eprintln!("reload failed: {e}"))
+        .ok();
 
     HttpResponse::Ok().json(block)
 }
@@ -228,13 +494,37 @@ async fn query_state(
     HttpResponse::Ok().body(val.to_string())
 }
 
+#[post("/sql")]
+async fn sql_query(
+    data: web::Data<AppState>,
+    req: web::Json<SqlRequest>,
+) -> impl Responder {
+    match data.query_engine.run_query(&req.sql).await {
+        Ok(batches) => {
+            let json = batches_to_json(&batches);
+            HttpResponse::Ok().json(json)
+        }
+
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
+}
+
 // ===================== MAIN =====================
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let engine = Arc::new(BlockchainEngine::new());
+    let engine = Arc::new(BlockchainEngine::new("./ledger"));
 
-    let app_state = web::Data::new(AppState { engine });
+    let query_engine =
+        Arc::new(
+            QueryEngine::new(engine.clone())
+        );
+
+    query_engine
+        .reload_blocks_table()
+        .unwrap();
+
+    let app_state = web::Data::new(AppState { engine, query_engine });
 
     println!("Blockchain node running at http://127.0.0.1:8080");
 
@@ -244,6 +534,7 @@ async fn main() -> std::io::Result<()> {
             .service(submit_tx)
             .service(mine_block)
             .service(query_state)
+            .service(sql_query)
     })
     .bind(("127.0.0.1", 8080))?
     .run()

@@ -20,3 +20,7 @@ actix-web = "4.0"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.11", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+rocksdb = "0.21"
+datafusion = "42.0.0"
+futures = "0.3"
+async-trait = "0.1"

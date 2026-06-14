@@ -27,7 +27,15 @@ enum Commands {
         #[arg(short, long)]
         key_slot: String,
     },
+
+    Sql {
+        #[arg(short, long)]
+        query: String,
+    },
+
 }
+
+
 fn print_block(res: &str) {
     let v: serde_json::Value = serde_json::from_str(res).unwrap();
 
@@ -105,6 +113,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
 
             println!("{res}");
+        }
+
+        Commands::Sql { query } => {
+            let res = client
+                .post(format!("{}/sql", base_url))
+                .json(&json!({ "sql": query }))
+                .send()
+                .await?
+                .text()
+                .await?;
+
+             let v: serde_json::Value = serde_json::from_str(&res)?;
+             println!("{}", serde_json::to_string_pretty(&v)?);
         }
     }
 
