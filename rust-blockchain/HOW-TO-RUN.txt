@@ -1,9 +1,61 @@
-Ensure you have cd into rust-blockchain before proceeding
 
-cargo run --bin blockchain-node
+TradeFlow Blockchain Integration Guide (Windows Dev Setup)
+
+## 🛠️ Prerequisites & Fixes for Windows
+
+### 1. Install Rust
+Download and run the official Windows installer **`rustup-init.exe`** from [https://rustup.rs/](https://rustup.rs/). Choose default option `1`. 
+*⚠️ Close and reopen your terminal after installation.*
+
+### 2. Install LLVM (Required for RocksDB)
+RocksDB requires `libclang.dll` to compile on Windows. Run this command in PowerShell:
+```powershell
+winget install LLVM.LLVM
+
+Search for "Edit the system environment variables" in the Windows Start Menu.
+
+Click Environment Variables...
+
+Under User Variables, click New...
+
+Set Variable name to LIBCLANG_PATH and Variable value to C:\Program Files\LLVM\bin.
+
+Restart VS Code completely to apply the paths.
+
+
+🚀 Running the Blockchain Node
+
+cd rust-blockchain
+
+
+🛠️ Common Windows Error: "CURRENT file corrupted"
+
+Remove-Item -Recurse -Force ledger
+
+
+⚙️ Consensus Configurations
+
+Option A: Run with Proof of Work (PoW)
+cargo run --bin blockchain-node -- --consensus pow
+
+Option B: Run with Proof of Stake (PoS)
+cargo run --bin blockchain-node -- --consensus pos
+
+
+1. Submit a Transaction
 cargo run --bin blockchain-cli deploy -b deadbeef -m init
+
+2. Mine the Transaction into a Block
 cargo run --bin blockchain-cli mine
-cargo run --bin blockchain-cli query-state --contract-id <txid> --key-slot anything
-(query rn only returns 1 to show that contract ID exists)
+
+3. Verify Consensus via API Status Endpoint
+curl.exe http://127.0.0.1:8080/consensus/status
+
+4. Query Blockchain Data using Virtual SQL
 cargo run --bin blockchain-cli sql --query "SELECT * FROM blocks"
-(currently can only query blocks, not transactions)
+
+Other query examples:
+
+SELECT COUNT(*) FROM blocks
+
+SELECT hash, nonce FROM blocks WHERE tx_count > 0
