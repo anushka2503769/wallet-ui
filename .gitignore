@@ -13,3 +13,4 @@ rust-blockchain/blockchain_ledger_db
 *.so
 *.dylib
 *.log
+rust-blockchain/ledger/
