@@ -1,3 +1,6 @@
+mod consensus;
+use consensus::{ConsensusEngine, ProofOfWork, ProofOfStake, Validator};
+
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -179,7 +182,6 @@ pub struct BlocksTableProvider {
     engine: Arc<BlockchainEngine>,
 }
 
-// Implement a custom TableProvider for the blocks data
 impl BlocksTableProvider {
     pub fn new(engine: Arc<BlockchainEngine>) -> Self {
         let schema = Arc::new(Schema::new(vec![
@@ -195,7 +197,6 @@ impl BlocksTableProvider {
     }
 }
 
-// Provide rows for the blocks table
 #[async_trait]
 impl TableProvider for BlocksTableProvider {
     fn as_any(&self) -> &dyn Any { self }
@@ -216,7 +217,6 @@ impl TableProvider for BlocksTableProvider {
     }
 }
 
-// Custom execution plan to convert the blocks data into record batches for DataFusion
 #[derive(Debug, Clone)]
 pub struct BlocksExecutionPlan {
     schema: SchemaRef,
@@ -224,7 +224,6 @@ pub struct BlocksExecutionPlan {
     properties: PlanProperties,
 }
 
-// This execution plan will be responsible for converting the in-memory blocks data into Arrow record batches
 impl BlocksExecutionPlan {
     pub fn new(schema: SchemaRef, engine: Arc<BlockchainEngine>) -> Self {
         let properties = PlanProperties::new(
@@ -242,7 +241,6 @@ impl DisplayAs for BlocksExecutionPlan {
     }
 }
 
-// Implement the ExecutionPlan trait to allow DataFusion to execute queries against the blocks data
 impl ExecutionPlan for BlocksExecutionPlan {
     fn as_any(&self) -> &dyn Any { self }
     fn schema(&self) -> SchemaRef { self.schema.clone() }
@@ -293,8 +291,6 @@ impl ExecutionPlan for BlocksExecutionPlan {
     }
 }
 
-
-// Convert RecordBatches to JSON rows for API responses
 fn batches_to_json(batches: &[RecordBatch]) -> Value {
     let mut rows = vec![];
 
@@ -349,7 +345,6 @@ fn batches_to_json(batches: &[RecordBatch]) -> Value {
 
 // ==================== Query Engine ====================
 
-// QueryEngine is responsible for registering the custom table provider and executing SQL queries against it
 pub struct QueryEngine {
     pub ctx: SessionContext,
     pub engine: Arc<BlockchainEngine>,
@@ -380,7 +375,6 @@ impl QueryEngine {
     }
 }
 
-
 // ===================== CONTRACT EXECUTION =====================
 
 fn execute_contract(engine: &BlockchainEngine, tx: &Transaction) -> Result<(), &'static str> {
@@ -395,6 +389,7 @@ fn execute_contract(engine: &BlockchainEngine, tx: &Transaction) -> Result<(), &
 struct AppState {
     engine: Arc<BlockchainEngine>,
     query_engine: Arc<QueryEngine>,
+    consensus: Arc<dyn ConsensusEngine>,  // ← pluggable consensus engine
 }
 
 // ===================== ENDPOINTS =====================
@@ -432,47 +427,23 @@ async fn mine_block(data: web::Data<AppState>) -> impl Responder {
         let _ = execute_contract(&data.engine, tx);
     }
 
-    let difficulty_prefix = "0000";
-    let timestamp = Utc::now().timestamp();
-    let mut nonce = 0u64;
-
     let tx_payload = serde_json::to_string(&transactions).unwrap();
 
-    let hash = loop {
-        let mut hasher = Sha256::new();
-
-        let input = format!(
-            "{}{}{}{}{}",
-            latest.index + 1,
-            tx_payload,
-            latest.hash,
-            timestamp,
-            nonce
-        );
-
-        hasher.update(input);
-
-        let candidate = format!("{:x}", hasher.finalize());
-
-        if candidate.starts_with(difficulty_prefix) {
-            break candidate;
-        }
-
-        nonce = nonce.wrapping_add(1);
-    };
-
-    let block = Block {
+    let mut block = Block {
         index: latest.index + 1,
-        timestamp,
+        timestamp: 0,           // consensus.mine() will fill this in
         transactions,
-        previous_hash: latest.hash,
-        nonce,
-        hash,
+        previous_hash: String::new(), // consensus.mine() will fill this in
+        nonce: 0,
+        hash: String::new(),
     };
+
+    // Delegate to whichever consensus engine is active (PoW or PoS)
+    data.consensus.mine(&mut block, &latest.hash, &tx_payload);
+
+    pool.clear();
 
     data.engine.write_block(&block);
-    let blocks =
-        data.engine.load_blocks();
 
     data.query_engine.reload_blocks_table()
         .map_err(|e| eprintln!("reload failed: {e}"))
@@ -487,7 +458,6 @@ async fn query_state(
     path: web::Path<(String, String)>,
 ) -> impl Responder {
     let (contract_id, _key) = path.into_inner();
-
 
     let val = data.engine.get_state(&format!("contract_{}", contract_id));
 
@@ -509,22 +479,57 @@ async fn sql_query(
     }
 }
 
+// Returns which consensus engine is currently active
+#[get("/consensus/status")]
+async fn consensus_status(data: web::Data<AppState>) -> impl Responder {
+    HttpResponse::Ok().json(serde_json::json!({
+        "engine": data.consensus.name(),
+        "active": true
+    }))
+}
+
 // ===================== MAIN =====================
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // ── Read --consensus flag from command line ──
+    // Usage:
+    //   cargo run --bin blockchain-node -- --consensus pow
+    //   cargo run --bin blockchain-node -- --consensus pos
+    //   (defaults to pow if not specified)
+    let args: Vec<String> = std::env::args().collect();
+    let consensus_flag = args
+        .windows(2)
+        .find(|w| w[0] == "--consensus")
+        .map(|w| w[1].to_lowercase())
+        .unwrap_or_else(|| "pow".to_string());
+
+    let consensus: Arc<dyn ConsensusEngine> = match consensus_flag.as_str() {
+        "pos" => {
+            println!("Consensus: Proof of Stake (PoS)");
+            Arc::new(ProofOfStake {
+                validators: vec![
+                    Validator { address: "validator-alpha".to_string(), stake: 5000 },
+                    Validator { address: "validator-beta".to_string(),  stake: 3000 },
+                    Validator { address: "validator-gamma".to_string(), stake: 2000 },
+                ],
+            })
+        }
+        _ => {
+            println!("Consensus: Proof of Work (PoW, difficulty=4)");
+            Arc::new(ProofOfWork { difficulty: 4 })
+        }
+    };
+
     let engine = Arc::new(BlockchainEngine::new("./ledger"));
 
-    let query_engine =
-        Arc::new(
-            QueryEngine::new(engine.clone())
-        );
+    let query_engine = Arc::new(QueryEngine::new(engine.clone()));
 
     query_engine
         .reload_blocks_table()
         .unwrap();
 
-    let app_state = web::Data::new(AppState { engine, query_engine });
+    let app_state = web::Data::new(AppState { engine, query_engine, consensus });
 
     println!("Blockchain node running at http://127.0.0.1:8080");
 
@@ -535,6 +540,7 @@ async fn main() -> std::io::Result<()> {
             .service(mine_block)
             .service(query_state)
             .service(sql_query)
+            .service(consensus_status)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
