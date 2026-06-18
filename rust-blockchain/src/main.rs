@@ -325,7 +325,7 @@ fn batches_to_json(batches: &[RecordBatch]) -> Value {
                     datafusion::arrow::datatypes::DataType::Utf8 => {
                         let arr = array
                             .as_any()
-                            .downcast_ref::<datafusion::arrow::array::StringArray>()
+                            .downcast_ref::<StringArray>()
                             .unwrap();
                         json!(arr.value(row))
                     }
@@ -341,6 +341,123 @@ fn batches_to_json(batches: &[RecordBatch]) -> Value {
     }
 
     json!(rows)
+}
+
+// =========== Transactions Table Provider for DataFusion ============
+
+#[derive(Debug, Clone)]
+pub struct TransactionsTableProvider {
+    schema: SchemaRef,
+    engine: Arc<BlockchainEngine>,
+}
+
+impl TransactionsTableProvider {
+    pub fn new(engine: Arc<BlockchainEngine>) -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("block_index", DataType::UInt64, false),
+            Field::new("tx_id", DataType::Utf8, false),
+            Field::new("contract_code", DataType::Utf8, true),
+            Field::new("contract_action", DataType::Utf8, true),
+        ]));
+
+        Self { schema, engine }
+    }
+}
+
+#[async_trait]
+impl TableProvider for TransactionsTableProvider {
+    fn as_any(&self) -> &dyn Any { self }
+    fn schema(&self) -> SchemaRef { self.schema.clone() }
+    fn table_type(&self) -> TableType { TableType::Base }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(TransactionsExecutionPlan::new(
+            self.schema.clone(),
+            self.engine.clone(),
+        )))
+    }
+}
+#[derive(Debug, Clone)]
+pub struct TransactionsExecutionPlan {
+    schema: SchemaRef,
+    engine: Arc<BlockchainEngine>,
+    properties: PlanProperties,
+}
+
+impl TransactionsExecutionPlan {
+    pub fn new(schema: SchemaRef, engine: Arc<BlockchainEngine>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        );
+        Self { schema, engine, properties }
+    }
+}
+
+impl DisplayAs for TransactionsExecutionPlan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "TransactionsExecutionPlan")
+    }
+}
+
+impl ExecutionPlan for TransactionsExecutionPlan {
+    fn as_any(&self) -> &dyn Any { self }
+    fn schema(&self) -> SchemaRef { self.schema.clone() }
+    fn properties(&self) -> &PlanProperties { &self.properties }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn name(&self) -> &str { "TransactionsExecutionPlan" }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+
+        let blocks = self.engine.load_blocks();
+
+        let mut block_indices = vec![];
+        let mut tx_ids = vec![];
+        let mut codes = vec![];
+        let mut actions = vec![];
+
+        for block in blocks {
+            for tx in block.transactions {
+                block_indices.push(block.index);
+                tx_ids.push(tx.id.clone());
+                codes.push(tx.contract_code.clone());
+                actions.push(tx.contract_action.clone());
+            }
+        }
+
+        let batch = RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(block_indices)),
+                Arc::new(StringArray::from(tx_ids)),
+                Arc::new(StringArray::from(codes)),
+                Arc::new(StringArray::from(actions)),
+            ],
+        )?;
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream::iter(vec![Ok(batch)]),
+        )))
+    }
 }
 
 // ==================== Query Engine ====================
@@ -363,6 +480,16 @@ impl QueryEngine {
 
         Ok(())
     }
+
+    pub fn reload_transactions_table(&self) -> Result<()> {
+        let provider = Arc::new(TransactionsTableProvider::new(self.engine.clone()));
+
+        let _ = self.ctx.deregister_table("transactions");
+        self.ctx.register_table("transactions", provider)?;
+
+        Ok(())
+    }
+
 
     pub async fn run_query(
         &self,
@@ -449,6 +576,10 @@ async fn mine_block(data: web::Data<AppState>) -> impl Responder {
         .map_err(|e| eprintln!("reload failed: {e}"))
         .ok();
 
+    data.query_engine.reload_transactions_table()
+        .map_err(|e| eprintln!("reload failed: {e}"))
+        .ok();
+
     HttpResponse::Ok().json(block)
 }
 
@@ -527,6 +658,10 @@ async fn main() -> std::io::Result<()> {
 
     query_engine
         .reload_blocks_table()
+        .unwrap();
+
+    query_engine
+        .reload_transactions_table()
         .unwrap();
 
     let app_state = web::Data::new(AppState { engine, query_engine, consensus });

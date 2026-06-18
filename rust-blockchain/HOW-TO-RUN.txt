@@ -59,3 +59,12 @@ Other query examples:
 SELECT COUNT(*) FROM blocks
 
 SELECT hash, nonce FROM blocks WHERE tx_count > 0
+
+5. Query Transaction Data use Virtual SQL
+cargo run --bin blockchain-cli sql --query "SELECT * FROM transactions"
+
+Other query examples:
+
+SELECT COUNT(*) FROM blocks
+
+SELECT * FROM transactions where contract_action = 'init'
