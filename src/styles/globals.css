@@ -493,6 +493,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
   white-space: nowrap;
 }
 
+.trading-select {
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+}
+
 /* ---- Glow accent decorative ---- */
 .glow-orb {
   position: absolute;

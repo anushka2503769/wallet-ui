@@ -83,6 +83,48 @@ function App() {
           >
             Settings
           </NavLink>
+
+          <NavLink
+            to="/markets"
+            className="sidebar-link"
+          >
+            Markets
+          </NavLink>
+
+          <NavLink
+            to="/futures"
+            className="sidebar-link"
+          >
+            Futures Trading
+          </NavLink>
+
+          <NavLink
+            to="/perpetuals"
+            className="sidebar-link"
+          >
+            Perpetuals Trading
+          </NavLink>
+
+          <NavLink
+            to="/options"
+            className="sidebar-link"
+          >
+            Options Trading
+          </NavLink>
+
+          <NavLink
+            to="/open-positions"
+            className="sidebar-link"
+          >
+            Open Positions
+          </NavLink>
+
+          <NavLink
+            to="/trade-history"
+            className="sidebar-link"
+          >
+            Trade History
+          </NavLink>
         </nav>
       </aside>
 

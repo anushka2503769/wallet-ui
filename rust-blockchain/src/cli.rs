@@ -124,6 +124,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .text()
                 .await?;
 
+            println!("RAW RESPONSE:");
+            println!("{}", res);
+
              let v: serde_json::Value = serde_json::from_str(&res)?;
              println!("{}", serde_json::to_string_pretty(&v)?);
         }
