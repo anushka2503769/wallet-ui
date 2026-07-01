@@ -12,6 +12,7 @@ import PerpetualsTrading from './pages/PerpetualsTrading/PerpetualsTrading';
 import OptionsTrading from './pages/OptionsTrading/OptionsTrading';
 import OpenPositions from './pages/OpenPositions/OpenPositions';
 import TradeHistory from './pages/TradeHistory/TradeHistory';
+import Blockchain from './pages/Blockchain/Blockchain';
 
 const routes = [
   {
@@ -43,10 +44,6 @@ const routes = [
     element: <Harness />
   },
   {
-    path: '/settings',
-    element: <Settings />
-  },
-  {
     path: '/markets',
     element: <Markets />
   },
@@ -69,7 +66,15 @@ const routes = [
   {
     path: '/trade-history',
     element: <TradeHistory />
-  }
+  },
+  {
+    path: '/blockchain',
+    element: <Blockchain />
+  },
+  {
+    path: '/settings',
+    element: <Settings />
+  },
 ];
 
 export default routes;

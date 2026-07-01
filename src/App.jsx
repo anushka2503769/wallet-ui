@@ -78,13 +78,6 @@ function App() {
           </NavLink>
 
           <NavLink
-            to="/settings"
-            className="sidebar-link"
-          >
-            Settings
-          </NavLink>
-
-          <NavLink
             to="/markets"
             className="sidebar-link"
           >
@@ -124,6 +117,19 @@ function App() {
             className="sidebar-link"
           >
             Trade History
+          </NavLink>
+          <NavLink 
+            to="/blockchain" 
+            className="sidebar-link"
+          >
+            Blockchain
+          </NavLink>
+
+          <NavLink
+            to="/settings"
+            className="sidebar-link"
+          >
+            Settings
           </NavLink>
         </nav>
       </aside>
