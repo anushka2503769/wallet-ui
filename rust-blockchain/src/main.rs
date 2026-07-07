@@ -128,7 +128,11 @@ impl BlockchainEngine {
         let mut opts = Options::default();
         opts.create_if_missing(true);
 
-        let db = DB::open(&opts, path).expect("Failed to open RocksDB");
+        let db = DB::open(&opts, path).unwrap_or_else(|err| {
+            panic!(
+                "Failed to open RocksDB: {err}. If the local dev ledger is corrupted, delete rust-blockchain/ledger and rerun the node."
+            )
+        });
 
         let engine = Self {
             mempool: Mutex::new(vec![]),

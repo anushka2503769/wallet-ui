@@ -7,19 +7,32 @@ export const WalletProvider = ({ children }) => {
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [blocks, setBlocks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     initializeWallet();
   }, []);
 
   const initializeWallet = async () => {
-    const walletData = await walletService.getWallet();
-    const txData = await walletService.getTransactions();
-    const blockData = await walletService.getBlocks();
+    setLoading(true);
+    setError(null);
 
-    setWallet(walletData);
-    setTransactions(txData);
-    setBlocks(blockData);
+    try {
+      const [walletData, txData, blockData] = await Promise.all([
+        walletService.getWallet(),
+        walletService.getTransactions(),
+        walletService.getBlocks()
+      ]);
+
+      setWallet(walletData);
+      setTransactions(txData);
+      setBlocks(blockData);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -28,6 +41,9 @@ export const WalletProvider = ({ children }) => {
         wallet,
         transactions,
         blocks,
+        loading,
+        error,
+        refreshWallet: initializeWallet,
         setTransactions,
         setBlocks
       }}

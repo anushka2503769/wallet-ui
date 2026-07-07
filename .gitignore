@@ -14,3 +14,4 @@ rust-blockchain/blockchain_ledger_db
 *.dylib
 *.log
 rust-blockchain/ledger/
+rust-blockchain/ledger/LOCK
