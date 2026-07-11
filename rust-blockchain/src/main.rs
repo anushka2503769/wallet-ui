@@ -1,6 +1,9 @@
 mod consensus;
 use consensus::{ConsensusEngine, ProofOfWork, ProofOfStake, Validator};
 
+mod price_feed;
+use price_feed::PriceFeed;
+
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -98,12 +101,6 @@ pub struct Position {
     pub leverage: Option<f64>,
     #[serde(default)]
     pub closed: bool,
-}
-
-#[derive(Serialize)]
-struct Market {
-    symbol: String,
-    price: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -612,6 +609,7 @@ impl QueryEngine {
 
 fn execute_contract(
     engine: &BlockchainEngine,
+    price_feed: &PriceFeed,
     tx: &Transaction,
 ) -> Result<(), &'static str> {
 
@@ -622,7 +620,7 @@ fn execute_contract(
             if let Some(trade) = &tx.trade {
 
                 let market_price =
-                    get_market_price(&trade.asset);
+                    get_market_price(price_feed, &trade.asset);
                 
                 let leverage =
                     trade.leverage.unwrap_or(1.0);
@@ -676,7 +674,7 @@ fn execute_contract(
             if let Some(trade) = &tx.trade {
                 
                 let market_price =
-                    get_market_price(&trade.asset);
+                    get_market_price(price_feed, &trade.asset);
 
                 let leverage =
                     trade.leverage.unwrap_or(1.0);
@@ -730,7 +728,7 @@ fn execute_contract(
             if let Some(trade) = &tx.trade {
 
                 let market_price =
-                    get_market_price(&trade.asset);
+                    get_market_price(price_feed, &trade.asset);
 
                 let cost =
                     market_price * trade.quantity;
@@ -808,6 +806,7 @@ struct AppState {
     engine: Arc<BlockchainEngine>,
     query_engine: Arc<QueryEngine>,
     consensus: Arc<dyn ConsensusEngine>,  // ← pluggable consensus engine
+    price_feed: Arc<PriceFeed>,           // ← live Yahoo Finance commodity prices
 }
 
 // ===================== ENDPOINTS =====================
@@ -846,7 +845,7 @@ async fn mine_block(data: web::Data<AppState>) -> impl Responder {
     let transactions = pool.clone();
 
     for tx in &transactions {
-        let _ = execute_contract(&data.engine, tx);
+        let _ = execute_contract(&data.engine, &data.price_feed, tx);
     }
 
     let tx_payload = serde_json::to_string(&transactions).unwrap();
@@ -946,38 +945,40 @@ async fn positions(
     HttpResponse::Ok().json(positions)
 }
 
-// Returns a list of available markets (hardcoded for now)
+// Returns the live commodity price list (Gold, Silver, Oil) sourced
+// from Yahoo Finance, refreshed on a background interval.
 #[get("/markets")]
-async fn markets() -> impl Responder {
-
-    let markets = vec![
-        Market {
-            symbol: "xGOLD".to_string(),
-            price: 2340.0,
-        },
-        Market {
-            symbol: "xSILVER".to_string(),
-            price: 28.0,
-        },
-        Market {
-            symbol: "xOIL".to_string(),
-            price: 83.0,
-        },
-    ];
-
-    HttpResponse::Ok().json(markets)
+async fn markets(data: web::Data<AppState>) -> impl Responder {
+    HttpResponse::Ok().json(data.price_feed.snapshot())
 }
-// Returns the current market price for a given asset (hardcoded for now)
-fn get_market_price(asset: &str) -> f64 {
 
-    match asset {
+// Server-Sent Events stream — pushes a price update the instant the
+// background feed refreshes any tracked commodity.
+#[get("/markets/stream")]
+async fn markets_stream(data: web::Data<AppState>) -> impl Responder {
+    let rx = data.price_feed.updates.subscribe();
 
-        "xGOLD" => 2340.0,
-        "xSILVER" => 28.0,
-        "xOIL" => 83.0,
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(update) => {
+                let payload = serde_json::to_string(&update).unwrap_or_default();
+                let bytes = web::Bytes::from(format!("data: {payload}\n\n"));
+                Some((Ok::<_, actix_web::Error>(bytes), rx))
+            }
+            // Sender dropped or receiver lagged too far behind — end the stream.
+            Err(_) => None,
+        }
+    });
 
-        _ => 0.0,
-    }
+    HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .streaming(stream)
+}
+
+// Returns the current live price for a given commodity asset.
+// Falls back to 0.0 for anything outside the tracked commodity set.
+fn get_market_price(price_feed: &PriceFeed, asset: &str) -> f64 {
+    price_feed.get(asset)
 }
 
 // Returns a list of all trades (from blocks)
@@ -1087,7 +1088,17 @@ async fn main() -> std::io::Result<()> {
         .reload_transactions_table()
         .unwrap();
 
-    let app_state = web::Data::new(AppState { engine, query_engine, consensus });
+    // ── Real-time commodity price feed (Yahoo Finance) ──
+    // Only Gold, Silver, and Oil are tracked — see price_feed::COMMODITIES.
+    let price_feed = PriceFeed::new();
+
+    println!("Fetching initial commodity prices from Yahoo Finance...");
+    price_feed.refresh_all().await;
+
+    // Keep prices fresh every 15s in the background for the lifetime of the node.
+    price_feed.clone().spawn_refresh_loop(std::time::Duration::from_secs(15));
+
+    let app_state = web::Data::new(AppState { engine, query_engine, consensus, price_feed });
 
     println!("Blockchain node running at http://127.0.0.1:8080");
 
@@ -1107,6 +1118,7 @@ async fn main() -> std::io::Result<()> {
             .service(consensus_status)
             .service(positions)
             .service(markets)
+            .service(markets_stream)
             .service(trade_history)
             .service(get_wallet)
     })
