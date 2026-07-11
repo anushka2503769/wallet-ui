@@ -1,13 +1,57 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+
+const NODE_URL = 'http://127.0.0.1:8080';
 
 function PerpetualsTrading() {
 
   const [asset, setAsset] = useState('xGOLD');
   const [quantity, setQuantity] = useState('');
   const [leverage, setLeverage] = useState(1);
-  const [direction, setDirection] = useState('LONG');
 
-  const submitTrade = async () => {
+  const [markets, setMarkets] = useState([]);
+  const [submitting, setSubmitting] = useState(null); // 'LONG' | 'SHORT' | null
+  const [result, setResult] = useState(null);
+
+  // Live commodity prices, so margin can be previewed before submitting
+  useEffect(() => {
+    const source = new EventSource(`${NODE_URL}/markets/stream`);
+
+    fetch(`${NODE_URL}/markets`)
+      .then((res) => res.json())
+      .then(setMarkets)
+      .catch(console.error);
+
+    source.onmessage = (event) => {
+      try {
+        const entry = JSON.parse(event.data);
+        setMarkets((prev) => {
+          const next = [...prev];
+          const idx = next.findIndex((m) => m.symbol === entry.symbol);
+          if (idx === -1) next.push(entry);
+          else next[idx] = entry;
+          return next;
+        });
+      } catch (err) {
+        console.error('Failed to parse price update', err);
+      }
+    };
+
+    return () => source.close();
+  }, []);
+
+  const price = markets.find((m) => m.symbol === asset)?.price ?? null;
+  const numericQuantity = Number(quantity) || 0;
+  const requiredMargin =
+    price != null && numericQuantity > 0 ? (numericQuantity * price) / leverage : null;
+
+  const submitTrade = async (direction) => {
+    if (numericQuantity <= 0) {
+      setResult({ ok: false, message: 'Enter a quantity greater than 0.' });
+      return;
+    }
+
+    setSubmitting(direction);
+    setResult(null);
 
     const tx = {
       id: '',
@@ -16,31 +60,38 @@ function PerpetualsTrading() {
 
       trade: {
         asset,
-        quantity: Number(quantity),
-        direction: direction,
+        quantity: numericQuantity,
+        direction,
         leverage: Number(leverage)
       }
     };
 
-    await fetch(
-      'http://127.0.0.1:8080/tx/submit',
-      {
-        method:'POST',
-        headers:{
-          'Content-Type':'application/json'
-        },
-        body: JSON.stringify(tx)
-      }
-    );
+    try {
+      await fetch(
+        `${NODE_URL}/tx/submit`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(tx)
+        }
+      );
 
-    await fetch(
-      'http://127.0.0.1:8080/engine/mine',
-      {
-        method:'POST'
-      }
-    );
+      await fetch(
+        `${NODE_URL}/engine/mine`,
+        {
+          method: 'POST'
+        }
+      );
 
-    alert('Perpetual position opened');
+      setResult({ ok: true, message: `${direction === 'LONG' ? 'Long' : 'Short'} perpetual position opened on ${asset}.` });
+      setQuantity('');
+    } catch (err) {
+      setResult({ ok: false, message: err.message });
+    }
+
+    setSubmitting(null);
   };
 
   return (
@@ -79,22 +130,45 @@ function PerpetualsTrading() {
           onChange={(e)=>setQuantity(e.target.value)}
         />
 
+        <div className="flex-between text-sm text-muted">
+          <span>Live Price</span>
+          <span className="font-mono">{price != null ? `$${price.toFixed(2)}` : 'Loading...'}</span>
+        </div>
+
+        <div className="flex-between text-sm text-muted">
+          <span>Required Margin</span>
+          <span className="font-mono">
+            {requiredMargin != null ? `$${requiredMargin.toFixed(2)}` : '—'}
+          </span>
+        </div>
+
         <div className="flex gap-4">
           <button
             className="cute-button btn-full long-button"
+            disabled={submitting !== null}
             onClick={() => submitTrade('LONG')}
           >
-            Open Long
+            {submitting === 'LONG' ? 'Opening…' : 'Open Long'}
           </button>
 
           <button
             className="cute-button btn-full short-button"
+            disabled={submitting !== null}
             onClick={() => submitTrade('SHORT')}
           >
-            Open Short
+            {submitting === 'SHORT' ? 'Opening…' : 'Open Short'}
           </button>
 
         </div>
+
+        {result && (
+          <div
+            className="text-sm"
+            style={{ color: result.ok ? 'var(--success)' : 'var(--danger)' }}
+          >
+            {result.message}
+          </div>
+        )}
 
       </div>
 
