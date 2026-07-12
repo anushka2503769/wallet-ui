@@ -1,0 +1,208 @@
+====================================================================
+  RUST BLOCKCHAIN — HOW TO RUN
+====================================================================
+
+This project has three pieces:
+  1. blockchain-node   — the Rust backend (API server, mining, P2P)
+  2. blockchain-cli    — a command-line client for the node
+  3. frontend          — the React/Vite web UI
+
+--------------------------------------------------------------------
+1. PREREQUISITES
+--------------------------------------------------------------------
+  - Rust + Cargo        https://rustup.rs
+  - Node.js + npm       https://nodejs.org
+  - (Optional, for multi-laptop use) Tailscale
+                        https://tailscale.com/download
+
+--------------------------------------------------------------------
+2. BUILD
+--------------------------------------------------------------------
+From the project root:
+
+    cargo build --release
+
+This builds both binaries: blockchain-node and blockchain-cli.
+
+For the frontend:
+
+    cd frontend
+    npm install
+
+--------------------------------------------------------------------
+3. RUN A SINGLE NODE (SIMPLEST CASE — ONE LAPTOP)
+--------------------------------------------------------------------
+Start the node:
+
+    cargo run --bin blockchain-node
+
+This starts on http://127.0.0.1:8080 using Proof of Work by default.
+
+Optional flags:
+
+    --consensus pow|pos     Which consensus engine to use (default: pow)
+    --port <number>         Which port to listen on (default: 8080)
+    --host <address>        Which network interface to bind to
+                            (default: 127.0.0.1 — see section 5 for
+                            when you need 0.0.0.0)
+    --advertise <url>       The address this node tells PEERS to use
+                            when reaching back to it (see section 5)
+    --peers <url,url,...>   Peer node(s) to connect to at startup
+
+Example with PoS:
+
+    cargo run --bin blockchain-node -- --consensus pos
+
+Leave this running in its own terminal.
+
+--------------------------------------------------------------------
+4. START THE FRONTEND
+--------------------------------------------------------------------
+In a second terminal:
+
+    cd frontend
+    npm run dev
+
+Open the URL it prints (usually http://localhost:5173) in your
+browser. The frontend automatically talks to the node running on
+the same machine — no configuration needed for local use.
+
+--------------------------------------------------------------------
+5. RUNNING TWO NODES THAT SYNC WITH EACH OTHER (P2P)
+--------------------------------------------------------------------
+
+--- 5a. Two nodes on the SAME laptop (for quick testing) ---
+
+    # Terminal 1
+    cargo run --bin blockchain-node -- --port 8080
+
+    # Terminal 2
+    cargo run --bin blockchain-node -- --port 8081 --peers http://127.0.0.1:8080
+
+Mine a block on either node (via its CLI or its frontend) and the
+other node should pick it up within a moment.
+
+--- 5b. Two laptops on the SAME Wi-Fi/LAN ---
+
+Find each laptop's local IP (e.g. 192.168.1.42) with:
+    - Mac/Linux: `ifconfig` or `ip addr`
+    - Windows:   `ipconfig`
+
+    # Laptop A (IP 192.168.1.42)
+    cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
+        --advertise http://192.168.1.42:8080
+
+    # Laptop B (IP 192.168.1.55), connecting to Laptop A
+    cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
+        --advertise http://192.168.1.55:8080 \
+        --peers http://192.168.1.42:8080
+
+--- 5c. Two laptops on DIFFERENT networks (recommended: Tailscale) ---
+
+Different networks usually means at least one laptop is behind NAT
+with no public IP, so a normal peer-to-peer connection can't be made
+directly. Tailscale solves this by giving each device a stable
+private IP that works no matter what network it's actually on.
+
+  1. Install Tailscale on both laptops and log into the same account
+     on each: https://tailscale.com/download
+
+  2. Get each laptop's Tailscale IP:
+         tailscale ip -4
+     You'll get something like 100.101.102.1 on one laptop and
+     100.101.102.2 on the other.
+
+  3. Run the node on each laptop, using ITS OWN Tailscale IP in
+     --advertise, and the OTHER laptop's Tailscale IP in --peers:
+
+     # Laptop A (Tailscale IP 100.101.102.1)
+     cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
+         --advertise http://100.101.102.1:8080
+
+     # Laptop B (Tailscale IP 100.101.102.2)
+     cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
+         --advertise http://100.101.102.2:8080 \
+         --peers http://100.101.102.1:8080
+
+  4. Test connectivity first with curl before worrying about the
+     frontend:
+         curl http://100.101.102.1:8080/consensus/status
+     You should get back JSON. If not, see Troubleshooting below.
+
+  5. To view the frontend from the OTHER laptop, start Vite bound to
+     all interfaces on whichever laptop is hosting it:
+         npm run dev -- --host 0.0.0.0
+     Then browse to http://100.101.102.1:5173 (its Tailscale IP)
+     from the other laptop. The frontend automatically talks to the
+     node on whatever host you loaded the page from — no extra
+     configuration needed.
+
+--- 5d. Two laptops on different networks WITHOUT a VPN ---
+
+Possible via router port forwarding, but more fragile:
+  - Forward an external port (e.g. 8080) to the hosting laptop's
+    LAN IP in its router's settings.
+  - Use the hosting laptop's public IP (find with `curl ifconfig.me`)
+    in place of a Tailscale IP in the steps above.
+  - Caveats: many home/mobile ISPs use carrier-grade NAT and won't
+    allow port forwarding at all; the public IP may change over time
+    unless you have a static IP or dynamic DNS; and this exposes the
+    port to the whole internet, so treat it as untrusted (see
+    Security Notes below).
+
+--------------------------------------------------------------------
+6. USING THE CLI
+--------------------------------------------------------------------
+The CLI talks to http://127.0.0.1:8080 by default. Run it from the
+same machine as the node it's targeting.
+
+    blockchain-cli mine
+    blockchain-cli prices
+    blockchain-cli watch --interval 5
+    blockchain-cli trade --asset xGOLD --action open-futures \
+        --quantity 2 --leverage 5
+    blockchain-cli query-state --contract-id <id> --key-slot <key>
+    blockchain-cli sql --query "SELECT * FROM blocks"
+
+--------------------------------------------------------------------
+7. TROUBLESHOOTING
+--------------------------------------------------------------------
+
+"404 Not Found" when browsing straight to the node's address
+  - Normal. There's no page at the root ("/"). Try a real endpoint
+    instead, e.g.:
+        curl http://<address>:8080/consensus/status
+    If that returns JSON, the node is working fine.
+
+Frontend loads but shows no data / network errors in the console
+  - Make sure the node's CORS is set to Cors::permissive() (already
+    the case in this project) so cross-origin requests aren't
+    blocked.
+  - Make sure you loaded the frontend from the SAME host the node is
+    reachable on (e.g. if the node is on Laptop A's Tailscale IP,
+    view the frontend at Laptop A's Tailscale IP:5173, not
+    localhost:5173, when you're on Laptop B).
+
+Can't reach the node at all from another laptop
+  - Check the node was started with --host 0.0.0.0, not the default
+    127.0.0.1.
+  - Check any firewall on the hosting laptop isn't blocking the port.
+  - On Tailscale, confirm both devices show as "Connected" via
+        tailscale status
+
+Peers connect but blocks don't sync
+  - Double check --advertise on each node is the address the OTHER
+    node can actually reach (not 127.0.0.1).
+  - Check both nodes' terminal output for [p2p] warnings.
+
+--------------------------------------------------------------------
+8. SECURITY NOTES
+--------------------------------------------------------------------
+This project has no authentication on any endpoint — anything that
+can reach a node's port can submit transactions, mine blocks, or
+send it blocks over the P2P endpoints. That's fine for local
+development or testing between your own devices over Tailscale, but
+do not expose a node's port to the open internet (e.g. via port
+forwarding) without adding your own access control first.
+
+====================================================================

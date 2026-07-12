@@ -15,12 +15,16 @@ import {
   Zap,
   Hash,
   Clock,
-  Link2
+  Link2,
+  Radio
 } from 'lucide-react';
 
 // ─── Constants ───────────────────────────────────────────────
-const NODE_URL = 'http://127.0.0.1:8080';
-const PROXY_URL = 'http://127.0.0.1:9090';
+// Use whatever host the page itself was loaded from (localhost, a LAN IP,
+// or a Tailscale/VPN address) so this works whether you're on the same
+// laptop as the node or viewing it from another machine on the network.
+const NODE_URL = `http://${window.location.hostname}:8080`;
+const PROXY_URL = `http://${window.location.hostname}:9090`;
 
 // ─── Helpers ─────────────────────────────────────────────────
 function shortHash(hash = '') {
@@ -329,6 +333,12 @@ function Blockchain() {
   const [keySlot, setKeySlot] = useState('');
   const [stateResult, setStateResult] = useState(null);
 
+  // Peer network
+  const [peers, setPeers] = useState([]);
+  const [peerAddress, setPeerAddress] = useState('');
+  const [peerBusy, setPeerBusy] = useState(false);
+  const [peerResult, setPeerResult] = useState(null);
+
   // ── Log helper ──
   function log(...lines) {
     const ts = new Date().toLocaleTimeString();
@@ -459,10 +469,39 @@ function Blockchain() {
     setBusy(false);
   }
 
+  // ── Peer network ──
+  async function fetchPeers() {
+    try {
+      const data = await apiGet('/p2p/peers');
+      setPeers(Array.isArray(data) ? data : []);
+    } catch {
+      // Best-effort — node may be offline or on an older build without P2P.
+    }
+  }
+
+  async function handleConnectPeer() {
+    if (!peerAddress) return;
+    setPeerBusy(true);
+    setPeerResult(null);
+    try {
+      const data = await apiPost('/p2p/peers/connect', { address: peerAddress });
+      setPeerResult({ ok: true, message: `Connected to ${peerAddress}` });
+      setPeers(Array.isArray(data.peers) ? data.peers : []);
+      setPeerAddress('');
+      checkNode(); // in case connecting triggered a chain sync
+    } catch (e) {
+      setPeerResult({ ok: false, message: e.message });
+    }
+    setPeerBusy(false);
+  }
+
   // ── Tab data load ──
   useEffect(() => {
     if (activeTab === 'explorer' && !blocksLoaded) {
       fetchBlocks();
+    }
+    if (activeTab === 'network') {
+      fetchPeers();
     }
   }, [activeTab]);
 
@@ -471,6 +510,7 @@ function Blockchain() {
     { id: 'submit', label: 'Submit & Mine', icon: <Send size={15} /> },
     { id: 'explorer', label: 'Block Explorer', icon: <Layers size={15} /> },
     { id: 'validators', label: 'Validators', icon: <ShieldCheck size={15} /> },
+    { id: 'network', label: 'Network', icon: <Radio size={15} /> },
   ];
 
   return (
@@ -479,7 +519,7 @@ function Blockchain() {
       <div className="page-header">
         <h2>Blockchain Manager</h2>
         <p>
-          Submit transactions, produce PoS blocks, and inspect the chain — all from one place.
+          Submit transactions, produce PoS blocks, inspect the chain, and sync with peer nodes — all from one place.
         </p>
       </div>
 
@@ -832,6 +872,90 @@ function Blockchain() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab: Network ── */}
+      {activeTab === 'network' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-6)' }}>
+          <div className="card flex col gap-4">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+              <Radio size={18} style={{ color: 'var(--accent)' }} />
+              <h3 style={{ margin: 0 }}>Connect to a Peer</h3>
+            </div>
+            <div className="divider" style={{ margin: 0 }} />
+
+            <p className="text-sm text-muted" style={{ margin: 0 }}>
+              Connect this node to another blockchain-node instance (e.g. one running on{' '}
+              <code className="font-mono">--port 8081</code>). Once connected, blocks mined by
+              either node propagate automatically to the other.
+            </p>
+
+            <div className="flex gap-3">
+              <input
+                className="form-input mono"
+                style={{ flex: 1 }}
+                placeholder="http://127.0.0.1:8081"
+                value={peerAddress}
+                onChange={(e) => setPeerAddress(e.target.value)}
+              />
+              <button
+                className="cute-button"
+                type="button"
+                disabled={peerBusy || !peerAddress}
+                onClick={handleConnectPeer}
+              >
+                {peerBusy ? 'Connecting…' : 'Connect'}
+              </button>
+            </div>
+
+            {peerResult && (
+              <div
+                className="text-sm"
+                style={{ color: peerResult.ok ? 'var(--success)' : 'var(--danger)' }}
+              >
+                {peerResult.message}
+              </div>
+            )}
+          </div>
+
+          <div className="card flex col gap-4">
+            <div className="flex-between">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+                <Link2 size={18} style={{ color: 'var(--accent2)' }} />
+                <h3 style={{ margin: 0 }}>Connected Peers ({peers.length})</h3>
+              </div>
+              <button
+                className="btn btn-ghost btn-sm"
+                type="button"
+                onClick={fetchPeers}
+                disabled={peerBusy}
+                style={{ gap: 6 }}
+              >
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+            </div>
+            <div className="divider" style={{ margin: 0 }} />
+
+            {peers.length === 0 && (
+              <p className="text-sm text-muted" style={{ margin: 0 }}>
+                No peers connected yet. This node is running standalone — its blocks
+                won't sync anywhere until you connect one above.
+              </p>
+            )}
+
+            {peers.map((peer) => (
+              <div
+                key={peer}
+                className="flex-between"
+                style={{ padding: 'var(--sp-3)', background: 'var(--bg-muted)', borderRadius: 'var(--r-md)' }}
+              >
+                <span className="font-mono text-sm">{peer}</span>
+                <span className="badge badge-success">Connected</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

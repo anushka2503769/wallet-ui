@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { TrendingUp, TrendingDown, Radio, Cpu } from 'lucide-react';
 
-const NODE_URL = 'http://127.0.0.1:8080';
+// Use whatever host the page itself was loaded from (localhost, a LAN IP,
+// or a Tailscale/VPN address) so this works whether you're on the same
+// laptop as the node or viewing it from another machine on the network.
+const NODE_URL = `http://${window.location.hostname}:8080`;
 
 function formatUpdatedAt(ts) {
   if (!ts) return '—';

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
-const NODE_URL = 'http://127.0.0.1:8080';
+// Use whatever host the page itself was loaded from, so this works whether
+// you're on the same laptop as the node or viewing it from another machine.
+const NODE_URL = `http://${window.location.hostname}:8080`;
 
 function OpenPositions() {
 

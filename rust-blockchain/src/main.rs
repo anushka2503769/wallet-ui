@@ -4,6 +4,9 @@ use consensus::{ConsensusEngine, ProofOfWork, ProofOfStake, Validator};
 mod price_feed;
 use price_feed::PriceFeed;
 
+mod p2p;
+use p2p::{PeerNetwork, PeerHandshake, BlockAnnouncement};
+
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -248,6 +251,33 @@ impl BlockchainEngine {
             self.db.get(db_key.as_bytes()).ok()??;
 
         serde_json::from_slice(&value).ok()
+    }
+
+    /// Wipes all blocks and derived contract state (wallet, positions) so a
+    /// better chain received from a peer can be replayed from genesis.
+    /// Used only during P2P fork resolution — see `adopt_chain_if_better`.
+    pub fn reset_chain_state(&self) {
+        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        let mut keys_to_delete = vec![];
+
+        for item in iter {
+            let (key, _) = item.unwrap();
+
+            if key.starts_with(b"block_")
+                || key.starts_with(b"state:position_")
+                || key.as_ref() == b"latest_index".as_slice()
+                || key.as_ref() == b"state:wallet".as_slice()
+            {
+                keys_to_delete.push(key.to_vec());
+            }
+        }
+
+        for key in keys_to_delete {
+            let _ = self.db.delete(key);
+        }
+
+        // Reset to the same starting balance new nodes get, before replaying.
+        self.put_json_state("wallet", &Wallet { balance: 100000.0 });
     }
 
 }
@@ -804,6 +834,94 @@ fn execute_contract(
     Ok(())
 }
 
+// ===================== P2P CHAIN SYNC =====================
+
+/// Tries to append a single block received from a peer directly onto our
+/// current chain tip. Returns true if it was valid and got appended.
+fn try_append_block(
+    engine: &BlockchainEngine,
+    consensus: &dyn ConsensusEngine,
+    price_feed: &PriceFeed,
+    block: &Block,
+) -> bool {
+    let latest = match engine.get_latest_block() {
+        Some(b) => b,
+        None => return false,
+    };
+
+    if block.index != latest.index + 1 {
+        return false;
+    }
+
+    if block.previous_hash != latest.hash {
+        return false;
+    }
+
+    if !consensus.verify(block) {
+        return false;
+    }
+
+    // Replay the block's transactions so wallet/position state matches
+    // what the peer that mined it already computed.
+    for tx in &block.transactions {
+        let _ = execute_contract(engine, price_feed, tx);
+    }
+
+    engine.write_block(block);
+    true
+}
+
+/// Validates a candidate chain (usually fetched from a peer) and, if it's
+/// longer than ours and fully valid, replaces our chain and replays every
+/// transaction from genesis so derived state stays consistent.
+///
+/// This is a simple "longest valid chain wins" rule — the same idea used
+/// by most toy blockchains for fork resolution.
+async fn adopt_chain_if_better(
+    engine: &BlockchainEngine,
+    consensus: &dyn ConsensusEngine,
+    price_feed: &PriceFeed,
+    candidate: Vec<Block>,
+) -> bool {
+    let current_len = engine.load_blocks().len();
+
+    if candidate.len() <= current_len {
+        return false;
+    }
+
+    if candidate.first().map(|b| b.index) != Some(0) {
+        return false; // must start at genesis
+    }
+
+    for pair in candidate.windows(2) {
+        let (prev, curr) = (&pair[0], &pair[1]);
+
+        if curr.index != prev.index + 1 {
+            return false;
+        }
+
+        if curr.previous_hash != prev.hash {
+            return false;
+        }
+
+        if !consensus.verify(curr) {
+            return false;
+        }
+    }
+
+    engine.reset_chain_state();
+
+    for block in &candidate {
+        engine.write_block(block);
+
+        for tx in &block.transactions {
+            let _ = execute_contract(engine, price_feed, tx);
+        }
+    }
+
+    true
+}
+
 // ===================== STATE =====================
 
 struct AppState {
@@ -811,6 +929,7 @@ struct AppState {
     query_engine: Arc<QueryEngine>,
     consensus: Arc<dyn ConsensusEngine>,  // ← pluggable consensus engine
     price_feed: Arc<PriceFeed>,           // ← live Yahoo Finance commodity prices
+    peer_network: Arc<PeerNetwork>,       // ← connected peer nodes
 }
 
 // ===================== ENDPOINTS =====================
@@ -877,6 +996,8 @@ async fn mine_block(data: web::Data<AppState>) -> impl Responder {
     data.query_engine.reload_transactions_table()
         .map_err(|e| eprintln!("reload failed: {e}"))
         .ok();
+
+    data.peer_network.broadcast_block(&block, None);
 
     HttpResponse::Ok().json(block)
 }
@@ -1047,6 +1168,98 @@ async fn get_wallet(
     HttpResponse::Ok().json(wallet)
 }
 
+// ===================== P2P ENDPOINTS =====================
+
+// Connect this node to another node's address. Registers with them and
+// pulls their known peers so the mesh grows transitively.
+#[post("/p2p/peers/connect")]
+async fn p2p_connect(
+    data: web::Data<AppState>,
+    req: web::Json<PeerHandshake>,
+) -> impl Responder {
+    match data.peer_network.connect(&req.address).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "connected": true,
+            "peers": data.peer_network.peers(),
+        })),
+        Err(e) => HttpResponse::BadGateway().body(e),
+    }
+}
+
+// Called by a remote node to tell us it knows about us — reciprocal
+// half of the handshake so both sides end up with each other listed.
+#[post("/p2p/peers/register")]
+async fn p2p_register(
+    data: web::Data<AppState>,
+    req: web::Json<PeerHandshake>,
+) -> impl Responder {
+    data.peer_network.add_peer(&req.address);
+    HttpResponse::Ok().json(serde_json::json!({ "registered": true }))
+}
+
+// Lists every peer this node currently knows about.
+#[get("/p2p/peers")]
+async fn p2p_peers(data: web::Data<AppState>) -> impl Responder {
+    HttpResponse::Ok().json(data.peer_network.peers())
+}
+
+// Returns this node's full chain — used by peers to catch up or resolve a fork.
+#[get("/p2p/chain")]
+async fn p2p_chain(data: web::Data<AppState>) -> impl Responder {
+    HttpResponse::Ok().json(data.engine.load_blocks())
+}
+
+// Receives a block a peer just mined. If it extends our tip, we append it
+// directly and re-broadcast onward. If it doesn't (we're behind, or there's
+// a fork), we fall back to pulling the sender's full chain and adopting it
+// if it's longer and valid.
+#[post("/p2p/blocks/announce")]
+async fn p2p_announce_block(
+    data: web::Data<AppState>,
+    req: web::Json<BlockAnnouncement>,
+) -> impl Responder {
+    let announcement = req.into_inner();
+    data.peer_network.add_peer(&announcement.from);
+
+    let appended = try_append_block(
+        &data.engine,
+        data.consensus.as_ref(),
+        &data.price_feed,
+        &announcement.block,
+    );
+
+    if appended {
+        data.query_engine.reload_blocks_table().ok();
+        data.query_engine.reload_transactions_table().ok();
+
+        // Gossip onward so the rest of the mesh finds out too.
+        data.peer_network.broadcast_block(&announcement.block, Some(&announcement.from));
+
+        return HttpResponse::Ok().json(serde_json::json!({ "appended": true }));
+    }
+
+    // Didn't extend our tip directly — see if the sender's full chain is
+    // longer than ours and worth adopting.
+    match data.peer_network.fetch_chain(&announcement.from).await {
+        Ok(candidate) => {
+            let adopted = adopt_chain_if_better(
+                &data.engine,
+                data.consensus.as_ref(),
+                &data.price_feed,
+                candidate,
+            ).await;
+
+            if adopted {
+                data.query_engine.reload_blocks_table().ok();
+                data.query_engine.reload_transactions_table().ok();
+            }
+
+            HttpResponse::Ok().json(serde_json::json!({ "appended": false, "resynced": adopted }))
+        }
+        Err(e) => HttpResponse::Ok().json(serde_json::json!({ "appended": false, "resynced": false, "error": e })),
+    }
+}
+
 // ===================== MAIN =====================
 
 #[actix_web::main]
@@ -1062,6 +1275,49 @@ async fn main() -> std::io::Result<()> {
         .find(|w| w[0] == "--consensus")
         .map(|w| w[1].to_lowercase())
         .unwrap_or_else(|| "pow".to_string());
+
+    // Which port this node listens on — lets you run several nodes on one
+    // machine for testing (e.g. --port 8081).
+    let port: u16 = args
+        .windows(2)
+        .find(|w| w[0] == "--port")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(8080);
+
+    // Which network interface to bind to. Defaults to 127.0.0.1 (local
+    // machine only). Set this to 0.0.0.0 to accept connections from other
+    // machines — over LAN, a VPN mesh like Tailscale, or with port forwarding.
+    let host = args
+        .windows(2)
+        .find(|w| w[0] == "--host")
+        .map(|w| w[1].clone())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    // The address THIS node tells peers to use when reaching back to it.
+    // 127.0.0.1 only means something on the machine it's running on, so if
+    // peers live elsewhere (LAN, VPN, internet), you must set this to
+    // wherever this node is actually reachable, e.g.:
+    //   --advertise http://192.168.1.42:8080      (same LAN)
+    //   --advertise http://100.101.102.103:8080    (Tailscale/ZeroTier IP)
+    //   --advertise http://your-public-ip:8080     (port forwarded)
+    let advertise = args
+        .windows(2)
+        .find(|w| w[0] == "--advertise")
+        .map(|w| w[1].clone())
+        .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
+
+    // Comma-separated list of peer node addresses to connect to at startup,
+    // e.g. --peers http://127.0.0.1:8081,http://192.168.1.12:8080
+    let bootstrap_peers: Vec<String> = args
+        .windows(2)
+        .find(|w| w[0] == "--peers")
+        .map(|w| {
+            w[1].split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
 
     let consensus: Arc<dyn ConsensusEngine> = match consensus_flag.as_str() {
         "pos" => {
@@ -1102,17 +1358,44 @@ async fn main() -> std::io::Result<()> {
     // Keep prices fresh every 15s in the background for the lifetime of the node.
     price_feed.clone().spawn_refresh_loop(std::time::Duration::from_secs(15));
 
-    let app_state = web::Data::new(AppState { engine, query_engine, consensus, price_feed });
+    // ── P2P networking ──
+    let self_address = advertise;
+    let peer_network = PeerNetwork::new(self_address.clone());
 
-    println!("Blockchain node running at http://127.0.0.1:8080");
+    for peer_addr in &bootstrap_peers {
+        println!("Connecting to peer {peer_addr}...");
+
+        if let Err(e) = peer_network.connect(peer_addr).await {
+            eprintln!("⚠️  p2p: failed to connect to {peer_addr}: {e}");
+            continue;
+        }
+
+        match peer_network.fetch_chain(peer_addr).await {
+            Ok(candidate) => {
+                if adopt_chain_if_better(&engine, consensus.as_ref(), &price_feed, candidate).await {
+                    println!("🔗 Synced chain from {peer_addr}");
+                    query_engine.reload_blocks_table().ok();
+                    query_engine.reload_transactions_table().ok();
+                }
+            }
+            Err(e) => eprintln!("⚠️  p2p: failed to fetch chain from {peer_addr}: {e}"),
+        }
+    }
+
+    let app_state = web::Data::new(AppState { engine, query_engine, consensus, price_feed, peer_network });
+
+    println!("Blockchain node listening on {host}:{port}");
+    println!("Advertising itself to peers as {self_address}");
 
     HttpServer::new(move || {
         App::new()
             .wrap(
-        Cors::default()
-            .allowed_origin("http://localhost:5173")
-            .allow_any_method()
-            .allow_any_header()
+        // Permissive CORS: this node is meant to be reached from the
+        // frontend running on a different machine/address (e.g. over
+        // Tailscale), so the origin isn't known in advance. Fine for a
+        // personal/dev setup; tighten this to specific origins before
+        // exposing the node to the public internet.
+        Cors::permissive()
             )
             .app_data(app_state.clone())
             .service(submit_tx)
@@ -1125,8 +1408,13 @@ async fn main() -> std::io::Result<()> {
             .service(markets_stream)
             .service(trade_history)
             .service(get_wallet)
+            .service(p2p_connect)
+            .service(p2p_register)
+            .service(p2p_peers)
+            .service(p2p_chain)
+            .service(p2p_announce_block)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind((host.as_str(), port))?
     .run()
     .await
 }

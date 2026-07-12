@@ -71,3 +71,17 @@ Set-Location c:\GitHub\wallet-ui\rust-blockchain
 Remove-Item -Recurse -Force .\ledger
 cargo run --bin blockchain-node
 ```
+
+
+```Running P2P
+Connect both devices to the same tailscale network
+tailscale ip -4
+
+To run on the laptop running the node + frontend
+
+cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 --advertise http://100.x.x.x:8080
+(Use `tailscale ip -4` on the host device for the 100.x.x.x)
+npm run dev -- --host 0.0.0.0
+
+Then browse to http://100.x.x.x:5173 from the other laptop.
+```
