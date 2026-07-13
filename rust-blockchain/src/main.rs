@@ -1177,13 +1177,38 @@ async fn p2p_connect(
     data: web::Data<AppState>,
     req: web::Json<PeerHandshake>,
 ) -> impl Responder {
-    match data.peer_network.connect(&req.address).await {
-        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
-            "connected": true,
-            "peers": data.peer_network.peers(),
-        })),
-        Err(e) => HttpResponse::BadGateway().body(e),
+    if let Err(e) = data.peer_network.connect(&req.address).await {
+        return HttpResponse::BadGateway().body(e);
     }
+
+    // Handshake alone only exchanges peer lists — it says nothing about
+    // whose chain is ahead. Pull the peer's chain now and adopt it if
+    // it's longer, so two already-running nodes reconcile immediately
+    // on connect instead of waiting for the next block to be mined.
+    let synced = match data.peer_network.fetch_chain(&req.address).await {
+        Ok(candidate) => {
+            let adopted = adopt_chain_if_better(
+                &data.engine,
+                data.consensus.as_ref(),
+                &data.price_feed,
+                candidate,
+            ).await;
+
+            if adopted {
+                data.query_engine.reload_blocks_table().ok();
+                data.query_engine.reload_transactions_table().ok();
+            }
+
+            adopted
+        }
+        Err(_) => false,
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "connected": true,
+        "synced": synced,
+        "peers": data.peer_network.peers(),
+    }))
 }
 
 // Called by a remote node to tell us it knows about us — reciprocal
@@ -1194,6 +1219,23 @@ async fn p2p_register(
     req: web::Json<PeerHandshake>,
 ) -> impl Responder {
     data.peer_network.add_peer(&req.address);
+
+    // The peer that connected to us might be the one with more history —
+    // check both directions so it doesn't matter who initiated.
+    if let Ok(candidate) = data.peer_network.fetch_chain(&req.address).await {
+        let adopted = adopt_chain_if_better(
+            &data.engine,
+            data.consensus.as_ref(),
+            &data.price_feed,
+            candidate,
+        ).await;
+
+        if adopted {
+            data.query_engine.reload_blocks_table().ok();
+            data.query_engine.reload_transactions_table().ok();
+        }
+    }
+
     HttpResponse::Ok().json(serde_json::json!({ "registered": true }))
 }
 
