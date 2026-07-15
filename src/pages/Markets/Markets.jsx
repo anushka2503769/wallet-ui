@@ -98,37 +98,99 @@ function Markets() {
       .catch(console.error);
   }, []);
 
-  async function handleSubmitTrade(e) {
-    e.preventDefault();
-    if (!tradeForm.asset) return;
 
-    setTradeBusy(true);
-    setTradeResult(null);
+async function handleSubmitTrade(e) {
+  e.preventDefault();
 
-    try {
-      const res = await fetch(`${NODE_URL}/tx/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: '',
-          contract_code: tradeForm.positionId || '',
-          contract_action: tradeForm.action,
-          trade: {
-            asset: tradeForm.asset,
-            quantity: parseFloat(tradeForm.quantity) || 0,
-            direction: tradeForm.direction,
-            leverage: tradeForm.leverage ? parseFloat(tradeForm.leverage) : null,
-          },
-        }),
-      });
-      const data = await res.json();
-      setTradeResult({ ok: res.ok, data });
-    } catch (err) {
-      setTradeResult({ ok: false, data: { error: err.message } });
+  setTradeBusy(true);
+  setTradeResult(null);
+
+  try {
+
+    let tx;
+
+    if (tradeForm.action === 'OPEN_FUTURES') {
+
+      tx = {
+        id: '',
+        contract_code: 'CommodityTrading',
+        contract_action: 'OPEN_FUTURES',
+
+        trade: {
+          asset: tradeForm.asset,
+          quantity: parseFloat(tradeForm.quantity) || 1,
+          direction: tradeForm.direction,
+          leverage: parseFloat(tradeForm.leverage) || 1,
+        },
+      };
+
+    } else if (tradeForm.action === 'OPEN_PERPETUAL') {
+
+      tx = {
+        id: '',
+        contract_code: 'CommodityTrading',
+        contract_action: 'OPEN_PERPETUAL',
+
+        trade: {
+          asset: tradeForm.asset,
+          quantity: parseFloat(tradeForm.quantity) || 1,
+          direction: tradeForm.direction,
+          leverage: parseFloat(tradeForm.leverage) || 1,
+        },
+      };
+
+    } else if (tradeForm.action === 'BUY_OPTION') {
+
+      tx = {
+        id: '',
+        contract_code: 'CommodityTrading',
+        contract_action: 'BUY_OPTION',
+
+        trade: {
+          asset: tradeForm.asset,
+          quantity: parseFloat(tradeForm.quantity) || 1,
+          direction: tradeForm.direction, // CALL or PUT
+        },
+      };
+
+    } else if (tradeForm.action === 'CLOSE_POSITION') {
+
+      tx = {
+        id: '',
+        contract_code: tradeForm.positionId,
+        contract_action: 'CLOSE_POSITION',
+      };
+
     }
 
-    setTradeBusy(false);
+    const res = await fetch(`${NODE_URL}/tx/submit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(tx),
+    });
+
+    const data = await res.json();
+
+    setTradeResult({
+      ok: res.ok,
+      data,
+    });
+
+  } catch (err) {
+
+    setTradeResult({
+      ok: false,
+      data: {
+        error: err.message,
+      },
+    });
+
   }
+
+  setTradeBusy(false);
+}
 
   async function handleMineBlock() {
     setMining(true);
@@ -201,92 +263,235 @@ function Markets() {
           <h3>Trade Commodity</h3>
 
           <form onSubmit={handleSubmitTrade} className="flex col gap-4">
-            <div className="form-group">
-              <label className="form-label">Asset</label>
-              <select
-                className="form-input"
-                value={tradeForm.asset}
-                onChange={(e) => setTradeForm((f) => ({ ...f, asset: e.target.value }))}
-              >
-                {markets.map((m) => (
-                  <option key={m.symbol} value={m.symbol}>
-                    {m.symbol} — ${m.price.toFixed(2)}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+            {/* Asset */}
+
+            {tradeForm.action !== 'CLOSE_POSITION' && (
+              <div className="form-group">
+
+                <label className="form-label">
+                  Asset
+                </label>
+
+                <select
+                  className="form-input"
+                  value={tradeForm.asset}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      asset: e.target.value
+                    }))
+                  }
+                >
+                  {markets.map((m) => (
+                    <option
+                      key={m.symbol}
+                      value={m.symbol}
+                    >
+                      {m.symbol} — ${m.price.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+
+              </div>
+            )}
+
+            {/* Action */}
 
             <div className="form-group">
-              <label className="form-label">Action</label>
+
+              <label className="form-label">
+                Action
+              </label>
+
               <select
                 className="form-input"
                 value={tradeForm.action}
-                onChange={(e) => setTradeForm((f) => ({ ...f, action: e.target.value }))}
+                onChange={(e) =>
+                  setTradeForm((f) => ({
+                    ...f,
+                    action: e.target.value
+                  }))
+                }
               >
-                <option value="OPEN_FUTURES">Open Futures</option>
-                <option value="OPEN_PERPETUAL">Open Perpetual</option>
-                <option value="BUY_OPTION">Buy Option</option>
-                <option value="CLOSE_POSITION">Close Position</option>
+                <option value="OPEN_FUTURES">
+                  Open Futures
+                </option>
+
+                <option value="OPEN_PERPETUAL">
+                  Open Perpetual
+                </option>
+
+                <option value="BUY_OPTION">
+                  Buy Option
+                </option>
+
+                <option value="CLOSE_POSITION">
+                  Close Position
+                </option>
+
               </select>
+
             </div>
 
-            <div className="grid-2">
+            {/* Quantity */}
+
+            {tradeForm.action !== 'CLOSE_POSITION' && (
               <div className="form-group">
-                <label className="form-label">Quantity</label>
+
+                <label className="form-label">
+                  Quantity
+                </label>
+
                 <input
                   className="form-input"
                   type="number"
                   step="any"
                   value={tradeForm.quantity}
-                  onChange={(e) => setTradeForm((f) => ({ ...f, quantity: e.target.value }))}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      quantity: e.target.value
+                    }))
+                  }
                 />
+
               </div>
+            )}
+
+            {/* Futures / Perpetual Direction */}
+
+            {(tradeForm.action === 'OPEN_FUTURES' ||
+              tradeForm.action === 'OPEN_PERPETUAL') && (
 
               <div className="form-group">
-                <label className="form-label">Direction</label>
+
+                <label className="form-label">
+                  Direction
+                </label>
+
                 <select
                   className="form-input"
                   value={tradeForm.direction}
-                  onChange={(e) => setTradeForm((f) => ({ ...f, direction: e.target.value }))}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      direction: e.target.value
+                    }))
+                  }
                 >
-                  <option value="long">Long</option>
-                  <option value="short">Short</option>
+                  <option value="LONG">
+                    Long
+                  </option>
+
+                  <option value="SHORT">
+                    Short
+                  </option>
+
                 </select>
-              </div>
-            </div>
 
-            <div className="grid-2">
+              </div>
+            )}
+
+            {/* Option Type */}
+
+            {tradeForm.action === 'BUY_OPTION' && (
+
               <div className="form-group">
-                <label className="form-label">Leverage (optional)</label>
-                <input
+
+                <label className="form-label">
+                  Option Type
+                </label>
+
+                <select
                   className="form-input"
-                  type="number"
-                  step="any"
-                  placeholder="e.g. 5"
-                  value={tradeForm.leverage}
-                  onChange={(e) => setTradeForm((f) => ({ ...f, leverage: e.target.value }))}
-                />
+                  value={tradeForm.direction}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      direction: e.target.value
+                    }))
+                  }
+                >
+                  <option value="CALL">
+                    Call
+                  </option>
+
+                  <option value="PUT">
+                    Put
+                  </option>
+
+                </select>
+
               </div>
+            )}
+
+            {/* Perpetual Leverage */}
+
+            {(tradeForm.action === 'OPEN_PERPETUAL' || 
+            tradeForm.action === 'OPEN_FUTURES') && (
 
               <div className="form-group">
-                <label className="form-label">Position ID (close only)</label>
+
+                <label className="form-label">
+                  Leverage
+                </label>
+
+                <select
+                  className="form-input"
+                  value={tradeForm.leverage}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      leverage: e.target.value
+                    }))
+                  }
+                >
+                  <option value="1">1x</option>
+                  <option value="5">5x</option>
+                  <option value="10">10x</option>
+                  <option value="20">20x</option>
+                </select>
+
+              </div>
+            )}
+
+            {/* Close Position */}
+
+            {tradeForm.action === 'CLOSE_POSITION' && (
+
+              <div className="form-group">
+
+                <label className="form-label">
+                  Position ID
+                </label>
+
                 <input
                   className="form-input mono"
                   type="text"
-                  placeholder="required for close"
+                  placeholder="Position ID"
                   value={tradeForm.positionId}
-                  onChange={(e) => setTradeForm((f) => ({ ...f, positionId: e.target.value }))}
+                  onChange={(e) =>
+                    setTradeForm((f) => ({
+                      ...f,
+                      positionId: e.target.value
+                    }))
+                  }
                 />
+
               </div>
-            </div>
+            )}
 
             <button
               type="submit"
               className="cute-button btn-full"
-              disabled={tradeBusy || !tradeForm.asset}
+              disabled={tradeBusy}
             >
-              {tradeBusy ? 'Submitting…' : 'Submit Trade to Mempool'}
+              {tradeBusy
+                ? 'Submitting...'
+                : 'Submit Trade to Mempool'}
             </button>
+
           </form>
 
           {tradeResult && (

@@ -43,24 +43,10 @@ function App() {
           </NavLink>
 
           <NavLink
-            to="/transactions"
-            className="sidebar-link"
-          >
-            Transactions
-          </NavLink>
-
-          <NavLink
             to="/sendreceive"
             className="sidebar-link"
           >
             Send & Receive
-          </NavLink>
-
-          <NavLink
-            to="/explorer"
-            className="sidebar-link"
-          >
-            Explorer
           </NavLink>
 
           <NavLink
@@ -82,27 +68,6 @@ function App() {
             className="sidebar-link"
           >
             Markets
-          </NavLink>
-
-          <NavLink
-            to="/futures"
-            className="sidebar-link"
-          >
-            Futures Trading
-          </NavLink>
-
-          <NavLink
-            to="/perpetuals"
-            className="sidebar-link"
-          >
-            Perpetuals Trading
-          </NavLink>
-
-          <NavLink
-            to="/options"
-            className="sidebar-link"
-          >
-            Options Trading
           </NavLink>
 
           <NavLink

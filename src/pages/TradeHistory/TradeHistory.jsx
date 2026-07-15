@@ -45,6 +45,13 @@ function TradeHistory() {
 
                   <td>
                     <strong>{trade.asset}</strong>
+                    <br />
+                    <small
+                      onClick={() => navigator.clipboard.writeText(trade.tx_id)}
+                      title="Click to copy Position ID"
+                    >
+                      {trade.tx_id.slice(0, 12)}...
+                    </small>
                   </td>
 
                   <td>

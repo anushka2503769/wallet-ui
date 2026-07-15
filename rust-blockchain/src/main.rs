@@ -102,6 +102,8 @@ pub struct Position {
     pub direction: String,
     pub quantity: f64,
     pub leverage: Option<f64>,
+    pub entry_price: Option<f64>,
+    pub margin: Option<f64>,
     #[serde(default)]
     pub closed: bool,
 }
@@ -158,7 +160,7 @@ impl BlockchainEngine {
             engine.put_json_state(
                 "wallet",
                 &Wallet {
-                    balance: 100000.0,
+                    balance: 100000.00,
                 },
             );
         }
@@ -277,7 +279,7 @@ impl BlockchainEngine {
         }
 
         // Reset to the same starting balance new nodes get, before replaying.
-        self.put_json_state("wallet", &Wallet { balance: 100000.0 });
+        self.put_json_state("wallet", &Wallet { balance: 100000.00 });
     }
 
 }
@@ -653,30 +655,30 @@ fn execute_contract(
 
             if let Some(trade) = &tx.trade {
 
-                let market_price =
+                let entry_price =
                     get_market_price(price_feed, &trade.asset);
                 
                 let leverage =
                     trade.leverage.unwrap_or(1.0);
 
-                let required_margin =
-                    (trade.quantity * market_price)
+                let margin =
+                    (trade.quantity * entry_price)
                     / leverage;
 
-                let mut wallet = engine
+                let mut user_wallet = engine
                     .get_json_state::<Wallet>("wallet")
                     .unwrap();
 
-                if wallet.balance < required_margin {
+                if user_wallet.balance < margin {
 
                     return Err("Insufficient balance");
                 }
 
-                wallet.balance -= required_margin;
+                user_wallet.balance -= margin;
 
                 engine.put_json_state(
                     "wallet",
-                    &wallet
+                    &user_wallet
                 );
 
                 let position = Position {
@@ -690,6 +692,10 @@ fn execute_contract(
                         trade.quantity,
                     leverage:
                         trade.leverage,
+                    entry_price:
+                        Some(entry_price),
+                    margin:
+                        Some(margin),
                     closed: false,
                 };
 
@@ -707,30 +713,30 @@ fn execute_contract(
 
             if let Some(trade) = &tx.trade {
                 
-                let market_price =
+                let entry_price =
                     get_market_price(price_feed, &trade.asset);
 
                 let leverage =
                     trade.leverage.unwrap_or(1.0);
 
-                let required_margin =
-                    (trade.quantity * market_price)
+                let margin =
+                    (trade.quantity * entry_price)
                     / leverage;
 
-                let mut wallet = engine
+                let mut user_wallet = engine
                     .get_json_state::<Wallet>("wallet")
                     .unwrap();
 
-                if wallet.balance < required_margin {
+                if user_wallet.balance < margin {
 
                     return Err("Insufficient balance");
                 }
 
-                wallet.balance -= required_margin;
+                user_wallet.balance -= margin;
 
                 engine.put_json_state(
                     "wallet",
-                    &wallet
+                    &user_wallet
                 );
 
                 let position = Position {
@@ -744,6 +750,10 @@ fn execute_contract(
                         trade.quantity,
                     leverage:
                         trade.leverage,
+                    entry_price:
+                        Some(entry_price),
+                    margin:
+                        Some(margin),
                     closed: false,
                 };
 
@@ -761,25 +771,25 @@ fn execute_contract(
 
             if let Some(trade) = &tx.trade {
 
-                let market_price =
+                let entry_price =
                     get_market_price(price_feed, &trade.asset);
 
-                let cost =
-                    market_price * trade.quantity;
+                let margin =
+                    entry_price * trade.quantity;
 
-                let mut wallet = engine
+                let mut user_wallet = engine
                     .get_json_state::<Wallet>("wallet")
                     .unwrap();
 
-                if wallet.balance < cost {
+                if user_wallet.balance < margin {
                     return Err("Insufficient balance");
                 }
 
-                wallet.balance -= cost;
+                user_wallet.balance -= margin;
 
                 engine.put_json_state(
                     "wallet",
-                    &wallet
+                    &user_wallet
                 );
 
                 let position = Position {
@@ -793,6 +803,10 @@ fn execute_contract(
                         trade.quantity,
                     leverage:
                         trade.leverage,
+                    entry_price:
+                        Some(entry_price),
+                    margin:
+                        Some(margin),
                     closed: false,
                 };
 
@@ -817,6 +831,62 @@ fn execute_contract(
                     if let Ok(mut position) =
                         serde_json::from_slice::<Position>(&bytes)
                     {
+                        if position.closed {
+                            return Err("Position already closed");
+                        }
+
+                        // ==========================
+                        // Calculate PnL
+                        // ==========================
+
+                        let current_price =
+                            get_market_price(
+                                price_feed,
+                                &position.asset
+                            );
+
+                        let leverage =
+                            position.leverage.unwrap_or(1.0);
+
+                        let entry_price =
+                            position.entry_price.unwrap_or(0.0);
+
+                        let pnl =
+                            match position.direction.as_str() {
+
+                                "LONG" | "CALL" => {
+
+                                    (current_price - entry_price)
+                                        * position.quantity
+                                        * leverage
+                                }
+
+                                "SHORT" | "PUT" => {
+
+                                    (entry_price - current_price)
+                                        * position.quantity
+                                        * leverage
+                                }
+
+                                _ => 0.0,
+                            };
+
+                        // ==========================
+                        // Update wallet
+                        // ==========================
+
+                        let mut user_wallet = engine
+                            .get_json_state::<Wallet>("wallet")
+                            .unwrap();
+
+                        user_wallet.balance +=
+                            position.margin.unwrap_or(0.0)
+                            + pnl;
+
+                        engine.put_json_state(
+                            "wallet",
+                            &user_wallet
+                        );
                         position.closed = true;
 
                         engine.put_json_state(
