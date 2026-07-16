@@ -26,9 +26,43 @@ function Portfolio() {
 
   // Total Portfolio Value calculation (Liquid Balance + Staked Assets)
   const totalPortfolioValue = wallet.balance + totalStaked;
-  const monthlyGrowth = 12.4; 
 
-  // 3. Dynamic Asset Construction based on Live Token Configurations
+  // 3. Dynamic Monthly Growth Calculation
+  const calculateMonthlyGrowth = () => {
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    
+    // Filter transactions that occurred within the last 30 days
+    const recentTx = liveTransactions.filter(tx => {
+      const txTime = tx.timestamp ? new Date(tx.timestamp).getTime() : Date.now();
+      return txTime >= thirtyDaysAgo;
+    });
+
+    // Compute the net delta changes (inflows vs outflows) over these 30 days
+    const netChange = recentTx.reduce((acc, tx) => {
+      const amount = Number(tx.amount || 0);
+      const type = String(tx.type || '').toLowerCase();
+      
+      if (type.includes('receive') || type.includes('mine') || type.includes('reward')) {
+        return acc + amount; // Earned/Received assets add to growth
+      }
+      if (type.includes('send') || type.includes('pay')) {
+        return acc - amount; // Spent assets drop total baseline
+      }
+      return acc;
+    }, 0);
+
+    const startingValue = totalPortfolioValue - netChange;
+
+    // Prevent division by zero if it's a completely fresh wallet setup
+    if (startingValue <= 0) return "0.0";
+    
+    const growthPercentage = ((totalPortfolioValue - startingValue) / startingValue) * 100;
+    return growthPercentage.toFixed(1);
+  };
+
+  const monthlyGrowth = calculateMonthlyGrowth();
+
+  // 4. Dynamic Asset Construction based on Live Token Configurations
   const baseAssets = [
     {
       name: 'Liquid Flow Token (FLOW)',
@@ -103,7 +137,9 @@ function Portfolio() {
         <div className="card">
           <div className="stat-block">
             <span className="stat-label">Monthly Growth</span>
-            <span className="stat-value stat-up">+{monthlyGrowth}%</span>
+            <span className={`stat-value ${Number(monthlyGrowth) >= 0 ? 'stat-up' : 'stat-down'}`}>
+              {Number(monthlyGrowth) >= 0 ? `+${monthlyGrowth}` : monthlyGrowth}%
+            </span>
           </div>
         </div>
 
