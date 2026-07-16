@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useWallet } from '../../context/WalletContext';
 import WalletCard from '../../components/wallet/WalletCard';
 import PortfolioChart from '../../components/charts/PortfolioChart';
-import { TrendingUp, DollarSign, Shield, Copy, Check, Activity } from 'lucide-react';
+import TransactionTable from '../../components/tables/TransactionTable';
+import BlockList from '../../components/blockchain/BlockList';
 
 function Portfolio() {
   const [copied, setCopied] = useState(false);
@@ -16,16 +17,15 @@ function Portfolio() {
   };
 
   const transactionCount = liveTransactions.length;
+  const recentBlocks = liveBlocks.slice(0, 5);
 
   // 2. Real-time Staking Metrics Calculations
   const totalStaked = liveTransactions
     .filter((tx) => String(tx.type || '').toLowerCase().includes('stake'))
     .reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
 
-  // Total Portfolio Balance calculation (Liquid Balance + Staked Assets)
-  const totalBalance = wallet.balance + totalStaked;
-  
-  // Static placeholder for growth rate metric (can be integrated with historical backend APIs if available later)
+  // Total Portfolio Value calculation (Liquid Balance + Staked Assets)
+  const totalPortfolioValue = wallet.balance + totalStaked;
   const monthlyGrowth = 12.4; 
 
   // 3. Dynamic Asset Construction based on Live Token Configurations
@@ -67,7 +67,7 @@ function Portfolio() {
         <WalletCard wallet={wallet} />
 
         <div className="card flex col gap-4 justify-center">
-          <h3>Wallet Identifier Address</h3>
+          <h3>Wallet Address</h3>
           
           <div className="address-display">
             <span className="address-text" title={wallet.address}>
@@ -77,55 +77,37 @@ function Portfolio() {
           </div>
 
           <div className="flex gap-3">
-            <button type="button" className="btn btn-secondary btn-full gap-2" onClick={handleCopy}>
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-              {copied ? 'Copied Identity!' : 'Copy Hardware Address'}
+            <button className="cute-button btn-full" onClick={handleCopy}>
+              {copied ? 'Copied!' : 'Copy Address'}
             </button>
           </div>
         </div>
       </div>
 
       {/* Synchronized Live High-Level Grid Matrix */}
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-        
-        {/* Total Balance Metric Block */}
-        <div className="card flex align-center gap-4">
-          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
-            <DollarSign size={22} />
-          </div>
+      <div className="stats-grid">
+        <div className="card">
           <div className="stat-block">
-            <span className="stat-label">Total Balance</span>
-            <span className="stat-value">${Number(totalBalance || 0).toLocaleString()}</span>
+            <span className="stat-label">Total Portfolio Value</span>
+            <span className="stat-value">${Number(totalPortfolioValue || 0).toLocaleString()}</span>
           </div>
         </div>
 
-        {/* Staked Assets Metric Block */}
-        <div className="card flex align-center gap-4">
-          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
-            <Shield size={22} />
-          </div>
+        <div className="card">
           <div className="stat-block">
             <span className="stat-label">Staked Assets</span>
             <span className="stat-value">${Number(totalStaked || 0).toLocaleString()}</span>
           </div>
         </div>
 
-        {/* Monthly Growth Metric Block */}
-        <div className="card flex align-center gap-4">
-          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
-            <TrendingUp size={22} />
-          </div>
+        <div className="card">
           <div className="stat-block">
             <span className="stat-label">Monthly Growth</span>
             <span className="stat-value stat-up">+{monthlyGrowth}%</span>
           </div>
         </div>
 
-        {/* Total Transactions Metric Block */}
-        <div className="card flex align-center gap-4">
-          <div className="text-accent flex flex-center" style={{ background: 'var(--accent-dim)', padding: '12px', borderRadius: 'var(--r-md)' }}>
-            <Activity size={22} />
-          </div>
+        <div className="card">
           <div className="stat-block">
             <span className="stat-label">Total Transactions</span>
             <span className="stat-value">{transactionCount}</span>
@@ -142,11 +124,11 @@ function Portfolio() {
         </div>
         
         <div className="card flex col gap-4">
-          <h3>Live Asset Allocation</h3>
+          <h3>Asset Allocation</h3>
           <div className="flex col gap-4">
             {activeAssets.map((asset) => {
-              const allocationPct = totalBalance > 0 
-                ? ((asset.value / totalBalance) * 100).toFixed(1) 
+              const allocationPct = totalPortfolioValue > 0 
+                ? ((asset.value / totalPortfolioValue) * 100).toFixed(1) 
                 : "0.0";
                 
               return (
@@ -154,9 +136,9 @@ function Portfolio() {
                   <div className="flex-between">
                     <div>
                       <span className="text-sm" style={{ fontWeight: 600 }}>{asset.name}</span>
-                      <p className="text-xs text-muted">{asset.holdings} Units Available</p>
+                      <p className="text-xs text-muted">{asset.holdings} Holdings</p>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div className="text-right" style={{ textAlign: 'right' }}>
                       <strong className="text-sm">${asset.value.toLocaleString()}</strong>
                       <span className="text-xs text-accent mt-2" style={{ display: 'block', fontWeight: 600 }}>{allocationPct}%</span>
                     </div>
@@ -170,6 +152,37 @@ function Portfolio() {
           </div>
         </div>
       </div>
+
+      {/* Cute & Fully Integrated Responsive Table Modules */}
+      <div className="grid-auto">
+        <div className="card flex col gap-4" style={{ minWidth: 0 }}>
+          <h3>Recent Transactions</h3>
+          <div 
+            style={{ 
+              width: '100%', 
+              overflowX: 'auto', 
+              borderRadius: 'var(--r-md)',
+              background: 'var(--bg-surface-dim)'
+            }}
+          >
+            <TransactionTable transactions={liveTransactions.slice(0, 5)} />
+          </div>
+        </div>
+
+        <div className="card flex col gap-4" style={{ minWidth: 0 }}>
+          <h3>Recent Blocks</h3>
+          <div 
+            style={{ 
+              width: '100%', 
+              overflowX: 'auto', 
+              borderRadius: 'var(--r-md)',
+              background: 'var(--bg-surface-dim)'
+            }}
+          >
+            <BlockList blocks={recentBlocks} />
+          </div>
+        </div>
+      </div>
               
       {/* Individual Live Asset Cards Breakdown */}
       <div className="grid-auto">
@@ -178,11 +191,11 @@ function Portfolio() {
             <div className="flex-between">
               <div>
                 <h3 className="text-accent">{asset.name}</h3>
-                <span className={`badge ${asset.type === 'Staking' ? 'badge-warning' : 'badge-success'} mt-1`}>
-                  {asset.type}
-                </span>
+                <p className="text-xs text-muted">{asset.holdings} Holdings</p>
               </div>
-              <span className="text-xs text-muted font-mono">{asset.holdings} Units</span>
+              <span className="badge badge-accent">
+                {asset.type}
+              </span>
             </div>
             
             <div className="stat-block">
@@ -195,7 +208,7 @@ function Portfolio() {
             <div className="divider" style={{ margin: 'var(--sp-2) 0' }}></div>
 
             <div className="flex-between text-xs text-muted">
-              <span>Target Node Ecosystem</span>
+              <span>Network</span>
               <span className="font-mono text-accent">{asset.networkType}</span>
             </div>
           </div>
