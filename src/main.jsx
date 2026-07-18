@@ -1,4 +1,3 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -10,15 +9,18 @@ import './styles/variables.css';
 
 import { ThemeProvider } from './context/ThemeContext';
 import { WalletProvider } from './context/WalletContext';
+import { AuthProvider } from './context/AuthContext';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
-      <ThemeProvider>
-        <WalletProvider>
-          <App />
-        </WalletProvider>
-      </ThemeProvider>
+      <AuthProvider>
+        <ThemeProvider>
+          <WalletProvider>
+            <App />
+          </WalletProvider>
+        </ThemeProvider>
+      </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

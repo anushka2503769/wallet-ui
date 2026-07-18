@@ -1,4 +1,3 @@
-import Dashboard from './pages/Dashboard/Dashboard';
 import Portfolio from './pages/Portfolio/Portfolio';
 import SendReceive from './pages/SendReceive/SendReceive'
 import Staking from './pages/Staking/Staking';
@@ -8,47 +7,67 @@ import Markets from './pages/Markets/Markets';
 import OpenPositions from './pages/OpenPositions/OpenPositions';
 import TradeHistory from './pages/TradeHistory/TradeHistory';
 import Blockchain from './pages/Blockchain/Blockchain';
+import Login from './pages/Login/Login';
+import Register from './pages/Register/Register';
 
-const routes = [
+import ProtectedRoute from './components/common/ProtectedRoute';
+
+// Public routes — no login required
+export const publicRoutes = [
   {
-    path: '/',
-    element: <Dashboard />
+    path: '/login',
+    element: <Login />
   },
   {
-    path: '/portfolio',
-    element: <Portfolio />
+    path: '/register',
+    element: <Register />
+  },
+];
+
+// Everything else requires login. Harness additionally requires
+// the admin role — everyone else gets redirected to "/" if they
+// try to open it directly.
+const routes = [
+  {
+    // NOTE: Dashboard.jsx doesn't exist in this project, so '/' points
+    // at Portfolio directly. There's no separate /portfolio route
+    // anymore — that was rendering the exact same page as '/' and
+    // showing up twice in the sidebar. Swap this back to <Dashboard />
+    // (and re-add a distinct /portfolio route) once Dashboard exists.
+    path: '/',
+    element: <ProtectedRoute><Portfolio /></ProtectedRoute>
   },
   {
     path: '/sendreceive',
-    element: <SendReceive />
+    element: <ProtectedRoute><SendReceive /></ProtectedRoute>
   },
   {
     path: '/staking',
-    element: <Staking />
+    element: <ProtectedRoute><Staking /></ProtectedRoute>
   },
   {
     path: '/harness',
-    element: <Harness />
+    element: <ProtectedRoute adminOnly><Harness /></ProtectedRoute>
   },
   {
     path: '/markets',
-    element: <Markets />
+    element: <ProtectedRoute><Markets /></ProtectedRoute>
   },
   {
     path: '/open-positions',
-    element: <OpenPositions />
+    element: <ProtectedRoute><OpenPositions /></ProtectedRoute>
   },
   {
     path: '/trade-history',
-    element: <TradeHistory />
+    element: <ProtectedRoute><TradeHistory /></ProtectedRoute>
   },
   {
     path: '/blockchain',
-    element: <Blockchain />
+    element: <ProtectedRoute><Blockchain /></ProtectedRoute>
   },
   {
     path: '/settings',
-    element: <Settings />
+    element: <ProtectedRoute><Settings /></ProtectedRoute>
   },
 ];
 

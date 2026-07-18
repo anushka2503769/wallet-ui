@@ -1,16 +1,46 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
 function Settings() {
+  const { user, updateProfile, changePassword, logout } = useAuth();
+  const navigate = useNavigate();
+
   const [theme, setTheme] = useState("dark");
   const [notifications, setNotifications] = useState(true);
   const [twoFA, setTwoFA] = useState(false);
   const [copied, setCopied] = useState(false);
-  
+
   // State to hold the profile picture URL (null defaults to 'N')
   const [avatarUrl, setAvatarUrl] = useState(null);
-  
+
   // Reference to the hidden file input element
   const fileInputRef = useRef(null);
+
+  // Profile form — pre-filled with whatever was set at registration
+  const [profileForm, setProfileForm] = useState({
+    displayName: user?.displayName || "",
+    email: user?.email || ""
+  });
+  const [profileMessage, setProfileMessage] = useState(null);
+  const [profileError, setProfileError] = useState(null);
+
+  // Password form
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+  const [passwordMessage, setPasswordMessage] = useState(null);
+  const [passwordError, setPasswordError] = useState(null);
+
+  // Keep the form in sync if the user object changes (e.g. after a save)
+  useEffect(() => {
+    setProfileForm({
+      displayName: user?.displayName || "",
+      email: user?.email || ""
+    });
+  }, [user]);
 
   // Synchronize state value with document element attribute for real-time theme swapping
   useEffect(() => {
@@ -43,6 +73,49 @@ function Settings() {
     }
   };
 
+  const handleProfileChange = (e) => {
+    setProfileForm({ ...profileForm, [e.target.name]: e.target.value });
+  };
+
+  const handleSaveProfile = () => {
+    setProfileMessage(null);
+    setProfileError(null);
+
+    try {
+      updateProfile(profileForm);
+      setProfileMessage("Profile updated.");
+    } catch (err) {
+      setProfileError(err.message);
+    }
+  };
+
+  const handlePasswordChange = (e) => {
+    setPasswordForm({ ...passwordForm, [e.target.name]: e.target.value });
+  };
+
+  const handleChangePassword = () => {
+    setPasswordMessage(null);
+    setPasswordError(null);
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError("New passwords do not match.");
+      return;
+    }
+
+    try {
+      changePassword(passwordForm);
+      setPasswordMessage("Password changed.");
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    } catch (err) {
+      setPasswordError(err.message);
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login");
+  };
+
   return (
     <div className="page-container">
       {/* Page Header */}
@@ -60,7 +133,7 @@ function Settings() {
 
           <div className="flex align-center gap-4 mt-2 mb-2">
             {/* Hidden native input file explorer selector */}
-            <input 
+            <input
               type="file"
               ref={fileInputRef}
               onChange={handleFileChange}
@@ -69,22 +142,22 @@ function Settings() {
             />
 
             {/* Dynamic Avatar Container */}
-            <div 
+            <div
               className="flex-center font-mono text-inverse"
-              style={{ 
-                width: "48px", 
-                height: "48px", 
-                borderRadius: "var(--r-full)", 
+              style={{
+                width: "48px",
+                height: "48px",
+                borderRadius: "var(--r-full)",
                 background: avatarUrl ? `url(${avatarUrl}) center/cover no-repeat` : "var(--accent)",
                 fontWeight: "700",
                 overflow: "hidden"
               }}
             >
-              {!avatarUrl && "N"}
+              {!avatarUrl && (profileForm.displayName?.[0]?.toUpperCase() || "?")}
             </div>
-            
-            <button 
-              type="button" 
+
+            <button
+              type="button"
               className="btn btn-secondary btn-sm"
               onClick={handleAvatarButtonClick}
             >
@@ -92,12 +165,21 @@ function Settings() {
             </button>
           </div>
 
+          {profileError && (
+            <p className="text-sm" style={{ color: "var(--danger)" }}>{profileError}</p>
+          )}
+          {profileMessage && (
+            <p className="text-sm" style={{ color: "var(--success)" }}>{profileMessage}</p>
+          )}
+
           <div className="form-group">
             <label className="form-label">Display Name</label>
             <input
               className="form-input"
               type="text"
-              defaultValue="John Doe"
+              name="displayName"
+              value={profileForm.displayName}
+              onChange={handleProfileChange}
             />
           </div>
 
@@ -106,11 +188,13 @@ function Settings() {
             <input
               className="form-input"
               type="email"
-              defaultValue="john@example.com"
+              name="email"
+              value={profileForm.email}
+              onChange={handleProfileChange}
             />
           </div>
 
-          <button type="button" className="btn btn-primary mt-2">
+          <button type="button" className="btn btn-primary mt-2" onClick={handleSaveProfile}>
             Save Changes
           </button>
         </div>
@@ -119,12 +203,22 @@ function Settings() {
         <div className="card flex col gap-4">
           <h2>Password</h2>
 
+          {passwordError && (
+            <p className="text-sm" style={{ color: "var(--danger)" }}>{passwordError}</p>
+          )}
+          {passwordMessage && (
+            <p className="text-sm" style={{ color: "var(--success)" }}>{passwordMessage}</p>
+          )}
+
           <div className="form-group">
             <label className="form-label">Current Password</label>
             <input
               className="form-input"
               type="password"
+              name="currentPassword"
               placeholder="••••••••"
+              value={passwordForm.currentPassword}
+              onChange={handlePasswordChange}
             />
           </div>
 
@@ -133,7 +227,10 @@ function Settings() {
             <input
               className="form-input"
               type="password"
+              name="newPassword"
               placeholder="Enter new password"
+              value={passwordForm.newPassword}
+              onChange={handlePasswordChange}
             />
           </div>
 
@@ -142,11 +239,14 @@ function Settings() {
             <input
               className="form-input"
               type="password"
+              name="confirmPassword"
               placeholder="Confirm password"
+              value={passwordForm.confirmPassword}
+              onChange={handlePasswordChange}
             />
           </div>
 
-          <button type="button" className="btn btn-primary mt-2">
+          <button type="button" className="btn btn-primary mt-2" onClick={handleChangePassword}>
             Change Password
           </button>
         </div>
@@ -157,7 +257,7 @@ function Settings() {
 
           <div className="form-group">
             <label className="form-label">Wallet Address</label>
-            
+
             <div className="address-display">
               <div className="address-text">
                 0x7A91E4B6F93D5A4E9A2F1C83D4AB6C21F5D8E9A7
@@ -165,8 +265,8 @@ function Settings() {
               {copied && <span className="badge badge-accent">Copied</span>}
             </div>
 
-            <button 
-              type="button" 
+            <button
+              type="button"
               className="btn btn-secondary btn-full mt-2"
               onClick={handleCopy}
             >
@@ -186,14 +286,14 @@ function Settings() {
           <div className="flex col gap-2">
             <label className="form-label">Active Theme Mode</label>
             <div className="tabs">
-              <button 
+              <button
                 type="button"
                 className={`tab-btn ${theme === "dark" ? "active" : ""}`}
                 onClick={() => setTheme("dark")}
               >
                 🌙 Dark Mode
               </button>
-              <button 
+              <button
                 type="button"
                 className={`tab-btn ${theme === "light" ? "active" : ""}`}
                 onClick={() => setTheme("light")}
@@ -220,19 +320,19 @@ function Settings() {
 
           <div className="flex-between py-2">
             <span className="text-sm">Transaction Alerts</span>
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               style={{ accentColor: "var(--accent)", width: "16px", height: "16px" }}
-              defaultChecked 
+              defaultChecked
             />
           </div>
 
           <div className="flex-between py-2">
             <span className="text-sm">Security Alerts</span>
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               style={{ accentColor: "var(--accent)", width: "16px", height: "16px" }}
-              defaultChecked 
+              defaultChecked
             />
           </div>
         </div>
@@ -266,7 +366,7 @@ function Settings() {
           <p className="text-sm text-muted">
             Sign out of your wallet on this device securely.
           </p>
-          <button type="button" className="btn btn-danger btn-full mt-2">
+          <button type="button" className="btn btn-danger btn-full mt-2" onClick={handleLogout}>
             Logout
           </button>
         </div>
