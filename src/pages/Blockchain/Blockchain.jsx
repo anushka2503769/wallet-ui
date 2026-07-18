@@ -16,7 +16,8 @@ import {
   Hash,
   Clock,
   Link2,
-  Radio
+  Radio,
+  Lock
 } from 'lucide-react';
 
 // ─── Constants ───────────────────────────────────────────────
@@ -66,6 +67,22 @@ async function apiPost(path, body = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status}: ${text}`);
+  }
+  return r.json();
+}
+
+// Same as apiPost, but allows extra headers — used for the admin-only
+// endpoints that require an x-admin-key header.
+async function apiPostWithHeaders(path, body = {}, headers = {}) {
+  const r = await fetch(`${NODE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
   });
   if (!r.ok) {
     const text = await r.text();
@@ -339,6 +356,20 @@ function Blockchain() {
   const [peerBusy, setPeerBusy] = useState(false);
   const [peerResult, setPeerResult] = useState(null);
 
+  // Admin — kept in memory only, never persisted
+  const [adminKey, setAdminKey] = useState('');
+  const [newCommodity, setNewCommodity] = useState({
+    symbol: '',
+    yahooSymbol: '',
+    contractName: '',
+    minQuantity: '',
+    unit: 'lb',
+    customUnit: '',
+    currency: 'USD',
+  });
+  const [commodityBusy, setCommodityBusy] = useState(false);
+  const [commodityResult, setCommodityResult] = useState(null);
+
   // ── Log helper ──
   function log(...lines) {
     const ts = new Date().toLocaleTimeString();
@@ -495,6 +526,52 @@ function Blockchain() {
     setPeerBusy(false);
   }
 
+  // ── Admin: custom commodities ──
+  async function handleAddCommodity(e) {
+    e.preventDefault();
+
+    if (!adminKey) return;
+
+    setCommodityBusy(true);
+    setCommodityResult(null);
+
+    const unit = newCommodity.unit === 'other' ? newCommodity.customUnit : newCommodity.unit;
+
+    try {
+      await apiPostWithHeaders(
+        '/admin/commodities',
+        {
+          symbol: newCommodity.symbol.trim(),
+          yahoo_symbol: newCommodity.yahooSymbol.trim(),
+          contract_name: newCommodity.contractName.trim(),
+          min_quantity: parseFloat(newCommodity.minQuantity) || 0,
+          unit,
+          currency: newCommodity.currency.trim(),
+        },
+        { 'x-admin-key': adminKey }
+      );
+
+      setCommodityResult({
+        ok: true,
+        message: `${newCommodity.contractName || newCommodity.symbol} added — it'll show up on the Markets page once its first price is fetched.`,
+      });
+
+      setNewCommodity({
+        symbol: '',
+        yahooSymbol: '',
+        contractName: '',
+        minQuantity: '',
+        unit: 'lb',
+        customUnit: '',
+        currency: 'USD',
+      });
+    } catch (e) {
+      setCommodityResult({ ok: false, message: e.message });
+    }
+
+    setCommodityBusy(false);
+  }
+
   // ── Tab data load ──
   useEffect(() => {
     if (activeTab === 'explorer' && !blocksLoaded) {
@@ -511,6 +588,7 @@ function Blockchain() {
     { id: 'explorer', label: 'Block Explorer', icon: <Layers size={15} /> },
     { id: 'validators', label: 'Validators', icon: <ShieldCheck size={15} /> },
     { id: 'network', label: 'Network', icon: <Radio size={15} /> },
+    { id: 'admin', label: 'Admin', icon: <Lock size={15} /> },
   ];
 
   return (
@@ -956,6 +1034,152 @@ function Blockchain() {
                 <span className="badge badge-success">Connected</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab: Admin ── */}
+      {activeTab === 'admin' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-6)' }}>
+          <div className="card flex col gap-4">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+              <Lock size={18} style={{ color: 'var(--accent)' }} />
+              <h3 style={{ margin: 0 }}>Admin Key</h3>
+            </div>
+            <div className="divider" style={{ margin: 0 }} />
+
+            <p className="text-sm text-muted" style={{ margin: 0 }}>
+              Required to register custom commodities. Printed to the node's console at
+              startup (or set explicitly with <code className="font-mono">--admin-key</code>).
+              This is only kept in memory for this browser session — it's never saved anywhere.
+            </p>
+
+            <input
+              className="form-input mono"
+              type="password"
+              placeholder="Paste the node's admin key"
+              value={adminKey}
+              onChange={(e) => setAdminKey(e.target.value)}
+            />
+          </div>
+
+          <div className="card flex col gap-4">
+            <h3>Add Custom Commodity</h3>
+
+            <form onSubmit={handleAddCommodity} className="flex col gap-4">
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label">Symbol</label>
+                  <input
+                    className="form-input mono"
+                    placeholder="xCOFFEE"
+                    value={newCommodity.symbol}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Yahoo Finance Symbol</label>
+                  <input
+                    className="form-input mono"
+                    placeholder="KC=F"
+                    value={newCommodity.yahooSymbol}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, yahooSymbol: e.target.value.toUpperCase() }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Contract Name</label>
+                <input
+                  className="form-input"
+                  placeholder="Robusta Coffee Futures"
+                  value={newCommodity.contractName}
+                  onChange={(e) => setNewCommodity((f) => ({ ...f, contractName: e.target.value }))}
+                  required
+                />
+              </div>
+
+              <div className="grid-3">
+                <div className="form-group">
+                  <label className="form-label">Min Quantity</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="100"
+                    value={newCommodity.minQuantity}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, minQuantity: e.target.value }))}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Unit</label>
+                  <select
+                    className="form-input"
+                    value={newCommodity.unit}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, unit: e.target.value }))}
+                  >
+                    <option value="lb">Pounds (lb)</option>
+                    <option value="kg">Kilograms (kg)</option>
+                    <option value="oz">Ounces (oz)</option>
+                    <option value="bbl">Barrels (bbl)</option>
+                    <option value="other">Other…</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Currency</label>
+                  <input
+                    className="form-input"
+                    placeholder="USD"
+                    value={newCommodity.currency}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, currency: e.target.value.toUpperCase() }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {newCommodity.unit === 'other' && (
+                <div className="form-group">
+                  <label className="form-label">Custom Unit</label>
+                  <input
+                    className="form-input"
+                    placeholder="e.g. metric ton"
+                    value={newCommodity.customUnit}
+                    onChange={(e) => setNewCommodity((f) => ({ ...f, customUnit: e.target.value }))}
+                    required
+                  />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="cute-button btn-full"
+                disabled={commodityBusy || !adminKey}
+              >
+                {commodityBusy ? 'Adding…' : 'Add Commodity'}
+              </button>
+
+              {!adminKey && (
+                <p className="text-xs text-muted" style={{ margin: 0 }}>
+                  Enter the admin key above first.
+                </p>
+              )}
+            </form>
+
+            {commodityResult && (
+              <div
+                className="text-sm"
+                style={{ color: commodityResult.ok ? 'var(--success)' : 'var(--danger)' }}
+              >
+                {commodityResult.message}
+              </div>
+            )}
           </div>
         </div>
       )}

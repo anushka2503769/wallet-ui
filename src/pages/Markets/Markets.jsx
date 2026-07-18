@@ -11,6 +11,21 @@ function formatUpdatedAt(ts) {
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+// Formats a price in whatever currency the commodity is denominated in
+// (built-ins are USD, but a custom commodity could be anything).
+function formatPrice(value, currency) {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: currency || 'USD',
+    }).format(value);
+  } catch {
+    // Intl throws on an invalid/unrecognized currency code — fall back
+    // to just tagging the raw code on instead of crashing the page.
+    return `${Number(value).toFixed(2)} ${currency || ''}`.trim();
+  }
+}
+
 function Markets() {
   const [markets, setMarkets] = useState([]);
   const [wallet, setWallet] = useState(null);
@@ -98,99 +113,116 @@ function Markets() {
       .catch(console.error);
   }, []);
 
+  const selectedMarket = markets.find((m) => m.symbol === tradeForm.asset);
 
-async function handleSubmitTrade(e) {
-  e.preventDefault();
+  async function handleSubmitTrade(e) {
+    e.preventDefault();
 
-  setTradeBusy(true);
-  setTradeResult(null);
+    setTradeBusy(true);
+    setTradeResult(null);
 
-  try {
+    // Client-side minimum-quantity check — the node enforces this too, but
+    // catching it here saves a round trip and gives a clearer message.
+    if (tradeForm.action !== 'CLOSE_POSITION' && selectedMarket) {
+      const qty = parseFloat(tradeForm.quantity) || 0;
+      if (qty < selectedMarket.min_quantity) {
+        setTradeResult({
+          ok: false,
+          data: {
+            error: `Minimum quantity for ${selectedMarket.symbol} is ${selectedMarket.min_quantity} ${selectedMarket.unit}.`,
+          },
+        });
+        setTradeBusy(false);
+        return;
+      }
+    }
 
-    let tx;
+    try {
 
-    if (tradeForm.action === 'OPEN_FUTURES') {
+      let tx;
 
-      tx = {
-        id: '',
-        contract_code: 'CommodityTrading',
-        contract_action: 'OPEN_FUTURES',
+      if (tradeForm.action === 'OPEN_FUTURES') {
 
-        trade: {
-          asset: tradeForm.asset,
-          quantity: parseFloat(tradeForm.quantity) || 1,
-          direction: tradeForm.direction,
-          leverage: parseFloat(tradeForm.leverage) || 1,
+        tx = {
+          id: '',
+          contract_code: 'CommodityTrading',
+          contract_action: 'OPEN_FUTURES',
+
+          trade: {
+            asset: tradeForm.asset,
+            quantity: parseFloat(tradeForm.quantity) || 1,
+            direction: tradeForm.direction,
+            leverage: parseFloat(tradeForm.leverage) || 1,
+          },
+        };
+
+      } else if (tradeForm.action === 'OPEN_PERPETUAL') {
+
+        tx = {
+          id: '',
+          contract_code: 'CommodityTrading',
+          contract_action: 'OPEN_PERPETUAL',
+
+          trade: {
+            asset: tradeForm.asset,
+            quantity: parseFloat(tradeForm.quantity) || 1,
+            direction: tradeForm.direction,
+            leverage: parseFloat(tradeForm.leverage) || 1,
+          },
+        };
+
+      } else if (tradeForm.action === 'BUY_OPTION') {
+
+        tx = {
+          id: '',
+          contract_code: 'CommodityTrading',
+          contract_action: 'BUY_OPTION',
+
+          trade: {
+            asset: tradeForm.asset,
+            quantity: parseFloat(tradeForm.quantity) || 1,
+            direction: tradeForm.direction, // CALL or PUT
+          },
+        };
+
+      } else if (tradeForm.action === 'CLOSE_POSITION') {
+
+        tx = {
+          id: '',
+          contract_code: tradeForm.positionId,
+          contract_action: 'CLOSE_POSITION',
+        };
+
+      }
+
+      const res = await fetch(`${NODE_URL}/tx/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      };
+        body: JSON.stringify(tx),
+      });
 
-    } else if (tradeForm.action === 'OPEN_PERPETUAL') {
+      const data = await res.json();
 
-      tx = {
-        id: '',
-        contract_code: 'CommodityTrading',
-        contract_action: 'OPEN_PERPETUAL',
+      setTradeResult({
+        ok: res.ok,
+        data,
+      });
 
-        trade: {
-          asset: tradeForm.asset,
-          quantity: parseFloat(tradeForm.quantity) || 1,
-          direction: tradeForm.direction,
-          leverage: parseFloat(tradeForm.leverage) || 1,
+    } catch (err) {
+
+      setTradeResult({
+        ok: false,
+        data: {
+          error: err.message,
         },
-      };
-
-    } else if (tradeForm.action === 'BUY_OPTION') {
-
-      tx = {
-        id: '',
-        contract_code: 'CommodityTrading',
-        contract_action: 'BUY_OPTION',
-
-        trade: {
-          asset: tradeForm.asset,
-          quantity: parseFloat(tradeForm.quantity) || 1,
-          direction: tradeForm.direction, // CALL or PUT
-        },
-      };
-
-    } else if (tradeForm.action === 'CLOSE_POSITION') {
-
-      tx = {
-        id: '',
-        contract_code: tradeForm.positionId,
-        contract_action: 'CLOSE_POSITION',
-      };
+      });
 
     }
 
-    const res = await fetch(`${NODE_URL}/tx/submit`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(tx),
-    });
-
-    const data = await res.json();
-
-    setTradeResult({
-      ok: res.ok,
-      data,
-    });
-
-  } catch (err) {
-
-    setTradeResult({
-      ok: false,
-      data: {
-        error: err.message,
-      },
-    });
-
+    setTradeBusy(false);
   }
-
-  setTradeBusy(false);
-}
 
   async function handleMineBlock() {
     setMining(true);
@@ -211,7 +243,7 @@ async function handleSubmitTrade(e) {
       <div className="page-header flex-between">
         <div>
           <h2>Commodity Markets</h2>
-          <p>Live Gold, Silver, and Oil prices streamed from Yahoo Finance.</p>
+          <p>Live prices streamed from Yahoo Finance — Gold, Silver, and Oil by default, plus any custom commodities an admin has added.</p>
         </div>
         <span className={`badge ${connected ? 'badge-success' : 'badge-danger'}`}>
           <Radio size={12} style={{ marginRight: 4 }} />
@@ -239,18 +271,28 @@ async function handleSubmitTrade(e) {
             }}
           >
             <div className="flex-between">
-              <h3>{market.symbol}</h3>
+              <div>
+                <h3 style={{ marginBottom: 2 }}>{market.symbol}</h3>
+                <p className="text-xs text-muted" style={{ margin: 0 }}>
+                  {market.contract_name || market.yahoo_symbol}
+                </p>
+              </div>
               {flash[market.symbol] === 'up' && <TrendingUp size={16} style={{ color: 'var(--success)' }} />}
               {flash[market.symbol] === 'down' && <TrendingDown size={16} style={{ color: 'var(--danger)' }} />}
             </div>
 
             <div className="stat-block">
               <span className="stat-label">Price ({market.yahoo_symbol})</span>
-              <span className="stat-value">${market.price.toFixed(2)}</span>
+              <span className="stat-value">{formatPrice(market.price, market.currency)}</span>
             </div>
 
             <div className="flex-between text-xs text-muted" style={{ marginTop: 'var(--sp-2)' }}>
+              <span>Min: {market.min_quantity} {market.unit}</span>
               <span>{market.live ? 'Live' : 'Seed value'}</span>
+            </div>
+
+            <div className="flex-between text-xs text-muted" style={{ marginTop: 'var(--sp-1)' }}>
+              <span>{market.currency}</span>
               <span>{formatUpdatedAt(market.updated_at)}</span>
             </div>
           </div>
@@ -288,10 +330,16 @@ async function handleSubmitTrade(e) {
                       key={m.symbol}
                       value={m.symbol}
                     >
-                      {m.symbol} — ${m.price.toFixed(2)}
+                      {m.symbol} — {m.contract_name} — {formatPrice(m.price, m.currency)}
                     </option>
                   ))}
                 </select>
+
+                {selectedMarket && (
+                  <p className="text-xs text-muted" style={{ margin: '4px 0 0' }}>
+                    Minimum quantity: {selectedMarket.min_quantity} {selectedMarket.unit}
+                  </p>
+                )}
 
               </div>
             )}
@@ -340,13 +388,14 @@ async function handleSubmitTrade(e) {
               <div className="form-group">
 
                 <label className="form-label">
-                  Quantity
+                  Quantity {selectedMarket ? `(${selectedMarket.unit})` : ''}
                 </label>
 
                 <input
                   className="form-input"
                   type="number"
                   step="any"
+                  min={selectedMarket?.min_quantity ?? undefined}
                   value={tradeForm.quantity}
                   onChange={(e) =>
                     setTradeForm((f) => ({

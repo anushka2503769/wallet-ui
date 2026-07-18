@@ -2,12 +2,12 @@ mod consensus;
 use consensus::{ConsensusEngine, ProofOfWork, ProofOfStake, Validator};
 
 mod price_feed;
-use price_feed::PriceFeed;
+use price_feed::{PriceFeed, CommodityConfig};
 
 mod p2p;
 use p2p::{PeerNetwork, PeerHandshake, BlockAnnouncement};
 
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -655,6 +655,12 @@ fn execute_contract(
 
             if let Some(trade) = &tx.trade {
 
+                if let Some(min_qty) = price_feed.min_quantity(&trade.asset) {
+                    if trade.quantity < min_qty {
+                        return Err("Quantity below minimum for this commodity");
+                    }
+                }
+
                 let entry_price =
                     get_market_price(price_feed, &trade.asset);
                 
@@ -712,6 +718,12 @@ fn execute_contract(
         Some("OPEN_PERPETUAL") => {
 
             if let Some(trade) = &tx.trade {
+
+                if let Some(min_qty) = price_feed.min_quantity(&trade.asset) {
+                    if trade.quantity < min_qty {
+                        return Err("Quantity below minimum for this commodity");
+                    }
+                }
                 
                 let entry_price =
                     get_market_price(price_feed, &trade.asset);
@@ -770,6 +782,12 @@ fn execute_contract(
         Some("BUY_OPTION") => {
 
             if let Some(trade) = &tx.trade {
+
+                if let Some(min_qty) = price_feed.min_quantity(&trade.asset) {
+                    if trade.quantity < min_qty {
+                        return Err("Quantity below minimum for this commodity");
+                    }
+                }
 
                 let entry_price =
                     get_market_price(price_feed, &trade.asset);
@@ -1000,6 +1018,7 @@ struct AppState {
     consensus: Arc<dyn ConsensusEngine>,  // ← pluggable consensus engine
     price_feed: Arc<PriceFeed>,           // ← live Yahoo Finance commodity prices
     peer_network: Arc<PeerNetwork>,       // ← connected peer nodes
+    admin_key: String,                    // ← required in x-admin-key for /admin/* routes
 }
 
 // ===================== ENDPOINTS =====================
@@ -1238,6 +1257,96 @@ async fn get_wallet(
     HttpResponse::Ok().json(wallet)
 }
 
+// ===================== ADMIN ENDPOINTS =====================
+
+#[derive(Deserialize)]
+struct NewCommodityRequest {
+    /// Internal trading symbol, e.g. "xCOFFEE"
+    symbol: String,
+    /// Yahoo Finance chart symbol used for live pricing, e.g. "KC=F"
+    yahoo_symbol: String,
+    /// Human-readable contract name, e.g. "Robusta Coffee Futures"
+    contract_name: String,
+    /// Minimum tradable quantity, in `unit` below
+    min_quantity: f64,
+    /// e.g. "lb", "kg", "oz", or any other unit string
+    unit: String,
+    /// e.g. "USD"
+    currency: String,
+}
+
+/// Checks the `x-admin-key` header against the node's configured admin key.
+/// Returns true if the request is authorized to hit an /admin/* endpoint.
+fn is_admin(req: &HttpRequest, expected_key: &str) -> bool {
+    req.headers()
+        .get("x-admin-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|provided| provided == expected_key)
+        .unwrap_or(false)
+}
+
+// Registers a new custom tradable commodity. Admin-only: requires the
+// x-admin-key header to match this node's configured admin key (printed to
+// the console at startup, or set explicitly with --admin-key).
+#[post("/admin/commodities")]
+async fn admin_add_commodity(
+    data: web::Data<AppState>,
+    http_req: HttpRequest,
+    body: web::Json<NewCommodityRequest>,
+) -> impl Responder {
+    if !is_admin(&http_req, &data.admin_key) {
+        return HttpResponse::Unauthorized().body("Invalid or missing x-admin-key header");
+    }
+
+    let body = body.into_inner();
+
+    if body.symbol.trim().is_empty() || body.yahoo_symbol.trim().is_empty() {
+        return HttpResponse::BadRequest().body("symbol and yahoo_symbol are required");
+    }
+
+    if body.contract_name.trim().is_empty() {
+        return HttpResponse::BadRequest().body("contract_name is required");
+    }
+
+    if body.unit.trim().is_empty() {
+        return HttpResponse::BadRequest().body("unit is required (e.g. lb, kg, oz)");
+    }
+
+    if body.currency.trim().is_empty() {
+        return HttpResponse::BadRequest().body("currency is required (e.g. USD)");
+    }
+
+    if body.min_quantity <= 0.0 {
+        return HttpResponse::BadRequest().body("min_quantity must be greater than 0");
+    }
+
+    let cfg = CommodityConfig {
+        symbol: body.symbol.trim().to_string(),
+        yahoo_symbol: body.yahoo_symbol.trim().to_string(),
+        contract_name: body.contract_name.trim().to_string(),
+        min_quantity: body.min_quantity,
+        unit: body.unit.trim().to_string(),
+        currency: body.currency.trim().to_uppercase(),
+    };
+
+    match data.price_feed.add_commodity(cfg) {
+        Ok(_) => {
+            // Persist so the custom commodity survives a node restart.
+            data.engine.put_json_state(
+                "custom_commodities",
+                &data.price_feed.list_configs(),
+            );
+
+            // Fetch its price immediately rather than waiting for the next
+            // background refresh (every 15s).
+            data.price_feed.refresh_all().await;
+
+            HttpResponse::Ok().json(data.price_feed.snapshot())
+        }
+        Err(e) => HttpResponse::Conflict().body(e),
+    }
+}
+
 // ===================== P2P ENDPOINTS =====================
 
 // Connect this node to another node's address. Registers with them and
@@ -1372,6 +1481,17 @@ async fn p2p_announce_block(
     }
 }
 
+// Generates a pseudo-random admin key when none is provided via --admin-key,
+// so there's never a hardcoded default. Not cryptographically audited —
+// fine for local/dev use, but pass a real secret via --admin-key for
+// anything more exposed.
+fn generate_admin_key() -> String {
+    let seed = format!("{:?}-{}", std::time::SystemTime::now(), std::process::id());
+    let mut hasher = Sha256::new();
+    hasher.update(seed.as_bytes());
+    format!("{:x}", hasher.finalize())[..32].to_string()
+}
+
 // ===================== MAIN =====================
 
 #[actix_web::main]
@@ -1431,6 +1551,16 @@ async fn main() -> std::io::Result<()> {
         })
         .unwrap_or_default();
 
+    // Secret required in the x-admin-key header to hit /admin/* endpoints
+    // (currently just registering custom commodities). If not provided,
+    // one is generated and printed once at startup — pass --admin-key to
+    // set a stable one across restarts.
+    let admin_key = args
+        .windows(2)
+        .find(|w| w[0] == "--admin-key")
+        .map(|w| w[1].clone())
+        .unwrap_or_else(generate_admin_key);
+
     let consensus: Arc<dyn ConsensusEngine> = match consensus_flag.as_str() {
         "pos" => {
             println!("Consensus: Proof of Stake (PoS)");
@@ -1461,11 +1591,28 @@ async fn main() -> std::io::Result<()> {
         .unwrap();
 
     // ── Real-time commodity price feed (Yahoo Finance) ──
-    // Only Gold, Silver, and Oil are tracked — see price_feed::COMMODITIES.
+    // Gold, Silver, and Oil are tracked by default; admins can register
+    // additional custom commodities at runtime via POST /admin/commodities.
     let price_feed = PriceFeed::new();
 
     println!("Fetching initial commodity prices from Yahoo Finance...");
     price_feed.refresh_all().await;
+
+    // Restore any custom commodities an admin registered in a previous run.
+    if let Some(saved) = engine.get_json_state::<Vec<CommodityConfig>>("custom_commodities") {
+        let mut restored_any = false;
+
+        for cfg in saved {
+            if price_feed.add_commodity(cfg).is_ok() {
+                restored_any = true;
+            }
+        }
+
+        if restored_any {
+            println!("Restored custom commodities from a previous run.");
+            price_feed.refresh_all().await;
+        }
+    }
 
     // Keep prices fresh every 15s in the background for the lifetime of the node.
     price_feed.clone().spawn_refresh_loop(std::time::Duration::from_secs(15));
@@ -1494,10 +1641,20 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
-    let app_state = web::Data::new(AppState { engine, query_engine, consensus, price_feed, peer_network });
+    let app_state = web::Data::new(AppState {
+        engine,
+        query_engine,
+        consensus,
+        price_feed,
+        peer_network,
+        admin_key: admin_key.clone(),
+    });
 
     println!("Blockchain node listening on {host}:{port}");
     println!("Advertising itself to peers as {self_address}");
+    println!("🔑 Admin key: {admin_key}");
+    println!("   Pass this as the x-admin-key header to use /admin/* endpoints.");
+    println!("   Set --admin-key <key> to use a stable one across restarts.");
 
     HttpServer::new(move || {
         App::new()
@@ -1525,6 +1682,7 @@ async fn main() -> std::io::Result<()> {
             .service(p2p_peers)
             .service(p2p_chain)
             .service(p2p_announce_block)
+            .service(admin_add_commodity)
     })
     .bind((host.as_str(), port))?
     .run()
