@@ -4,6 +4,9 @@ import Staking from './pages/Staking/Staking';
 import Harness from './pages/Harness/Harness';
 import Settings from './pages/Settings/Settings';
 import Markets from './pages/Markets/Markets';
+import FuturesTrading from './pages/FuturesTrading/FuturesTrading';
+import OptionsTrading from './pages/OptionsTrading/OptionsTrading';
+import PerpetualsTrading from './pages/PerpetualsTrading/PerpetualsTrading';
 import OpenPositions from './pages/OpenPositions/OpenPositions';
 import TradeHistory from './pages/TradeHistory/TradeHistory';
 import Blockchain from './pages/Blockchain/Blockchain';
@@ -52,6 +55,18 @@ const routes = [
   {
     path: '/markets',
     element: <ProtectedRoute><Markets /></ProtectedRoute>
+  },
+  {
+    path: '/futures',
+    element: <ProtectedRoute><FuturesTrading /></ProtectedRoute>
+  },
+  {
+    path: '/options',
+    element: <ProtectedRoute><OptionsTrading /></ProtectedRoute>
+  },
+  {
+    path: '/perpetuals',
+    element: <ProtectedRoute><PerpetualsTrading /></ProtectedRoute>
   },
   {
     path: '/open-positions',

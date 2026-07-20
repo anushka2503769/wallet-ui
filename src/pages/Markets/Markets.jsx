@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { LineChart, Line, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TrendingUp, TrendingDown, Radio, Cpu } from 'lucide-react';
 
 // Use whatever host the page itself was loaded from (localhost, a LAN IP,
@@ -30,11 +31,14 @@ function Markets() {
   const [markets, setMarkets] = useState([]);
   const [wallet, setWallet] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [mempool, setMempool] = useState([]);
 
   // Per-symbol flash direction, cleared a moment after each update.
   const [flash, setFlash] = useState({});
   const prevPrices = useRef({});
   const flashTimers = useRef({});
+  const priceHistory = useRef({});
+  const [historyTick, setHistoryTick] = useState(0);
 
   // Trade form
   const [tradeForm, setTradeForm] = useState({
@@ -47,6 +51,7 @@ function Markets() {
   });
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeResult, setTradeResult] = useState(null);
+  const tradeFeeRate = 0.0025;
 
   // Mining
   const [mining, setMining] = useState(false);
@@ -65,6 +70,11 @@ function Markets() {
     }
     prevPrices.current[entry.symbol] = entry.price;
 
+    const timestamp = entry.updated_at ?? Math.floor(Date.now() / 1000);
+    const history = priceHistory.current[entry.symbol] ?? [];
+    priceHistory.current[entry.symbol] = [...history, { timestamp, price: entry.price }].slice(-24);
+    setHistoryTick((value) => value + 1);
+
     setMarkets((prev) => {
       const next = [...prev];
       const idx = next.findIndex((m) => m.symbol === entry.symbol);
@@ -81,6 +91,9 @@ function Markets() {
       .then((data) => {
         setMarkets(data);
         data.forEach((m) => { prevPrices.current[m.symbol] = m.price; });
+        data.forEach((m) => {
+          priceHistory.current[m.symbol] = [{ timestamp: m.updated_at ?? Math.floor(Date.now() / 1000), price: m.price }];
+        });
         if (data.length) {
           setTradeForm((f) => (f.asset ? f : { ...f, asset: data[0].symbol }));
         }
@@ -105,6 +118,10 @@ function Markets() {
     return () => source.close();
   }, []);
 
+  useEffect(() => {
+    refreshMempool();
+  }, []);
+
   // Wallet
   useEffect(() => {
     fetch(`${NODE_URL}/wallet`)
@@ -114,6 +131,47 @@ function Markets() {
   }, []);
 
   const selectedMarket = markets.find((m) => m.symbol === tradeForm.asset);
+  const selectedHistory = selectedMarket ? (priceHistory.current[selectedMarket.symbol] ?? []) : [];
+  const chartData = selectedHistory.map((point) => ({
+    time: new Date(point.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    price: Number(point.price) || 0,
+  }));
+  const notionalValue = selectedMarket && tradeForm.action !== 'CLOSE_POSITION'
+    ? (parseFloat(tradeForm.quantity) || 0) * selectedMarket.price
+    : null;
+  const estimatedFee = notionalValue != null ? notionalValue * tradeFeeRate : null;
+
+  const queueSummary = useMemo(() => {
+    const summary = { bid: 0, sell: 0 };
+
+    for (const tx of mempool) {
+      const action = String(tx.contract_action || '').toUpperCase();
+      const direction = String(tx.trade?.direction || '').toUpperCase();
+
+      if (action === 'CLOSE_POSITION') continue;
+
+      if (action === 'BUY_OPTION') {
+        if (direction === 'PUT') summary.sell += 1;
+        else summary.bid += 1;
+        continue;
+      }
+
+      if (direction === 'SHORT' || direction === 'PUT') summary.sell += 1;
+      else summary.bid += 1;
+    }
+
+    return summary;
+  }, [mempool]);
+
+  async function refreshMempool() {
+    try {
+      const res = await fetch(`${NODE_URL}/mempool`);
+      const data = await res.json();
+      setMempool(Array.isArray(data) ? data : []);
+    } catch {
+      setMempool([]);
+    }
+  }
 
   async function handleSubmitTrade(e) {
     e.preventDefault();
@@ -210,6 +268,8 @@ function Markets() {
         data,
       });
 
+      await refreshMempool();
+
     } catch (err) {
 
       setTradeResult({
@@ -231,6 +291,7 @@ function Markets() {
     try {
       const res = await fetch(`${NODE_URL}/engine/mine`, { method: 'POST' });
       setMinedBlock(await res.json());
+      await refreshMempool();
     } catch (err) {
       setMinedBlock({ error: err.message });
     }
@@ -405,6 +466,12 @@ function Markets() {
                   }
                 />
 
+                {estimatedFee != null && selectedMarket && (
+                  <p className="text-xs text-muted" style={{ margin: '4px 0 0' }}>
+                    Estimated fee: {selectedMarket.currency} {estimatedFee.toFixed(2)}
+                  </p>
+                )}
+
               </div>
             )}
 
@@ -556,6 +623,45 @@ function Markets() {
               {JSON.stringify(tradeResult.data, null, 2)}
             </pre>
           )}
+        </div>
+
+        <div className="card flex col gap-4">
+          <h3>Market Activity</h3>
+
+          <div className="grid-3">
+            <div className="stat-block">
+              <span className="stat-label">Bid Queue</span>
+              <span className="stat-value">{queueSummary.bid}</span>
+            </div>
+
+            <div className="stat-block">
+              <span className="stat-label">Sell Queue</span>
+              <span className="stat-value">{queueSummary.sell}</span>
+            </div>
+
+            <div className="stat-block">
+              <span className="stat-label">Pending Orders</span>
+              <span className="stat-value">{mempool.length}</span>
+            </div>
+          </div>
+
+          <div style={{ height: 240 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} key={historyTick}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" hide />
+                <YAxis domain={["dataMin", "dataMax"]} width={60} />
+                <Tooltip />
+                <Line
+                  type="monotone"
+                  dataKey="price"
+                  stroke="var(--accent)"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         {/* Mine — creates a block priced against whatever the feed says right now */}

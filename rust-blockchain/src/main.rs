@@ -11,7 +11,6 @@ use actix_web::{get, post, web, App, HttpRequest, HttpResponse, HttpServer, Resp
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use rocksdb::{DB, Options};
@@ -24,7 +23,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::catalog::Session;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{Expr, TableType};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -1039,6 +1037,12 @@ async fn submit_tx(
     HttpResponse::Ok().json(tx)
 }
 
+#[get("/mempool")]
+async fn mempool(data: web::Data<AppState>) -> impl Responder {
+    let pool = data.engine.mempool.lock().unwrap().clone();
+    HttpResponse::Ok().json(pool)
+}
+
 #[post("/engine/mine")]
 async fn mine_block(data: web::Data<AppState>) -> impl Responder {
     let mut pool = data.engine.mempool.lock().unwrap();
@@ -1669,6 +1673,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_state.clone())
             .service(submit_tx)
             .service(mine_block)
+            .service(mempool)
             .service(query_state)
             .service(sql_query)
             .service(consensus_status)

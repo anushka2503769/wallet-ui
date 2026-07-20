@@ -69,6 +69,27 @@ function AppLayout() {
           </NavLink>
 
           <NavLink
+            to="/futures"
+            className="sidebar-link"
+          >
+            Futures
+          </NavLink>
+
+          <NavLink
+            to="/options"
+            className="sidebar-link"
+          >
+            Options
+          </NavLink>
+
+          <NavLink
+            to="/perpetuals"
+            className="sidebar-link"
+          >
+            Perpetuals
+          </NavLink>
+
+          <NavLink
             to="/open-positions"
             className="sidebar-link"
           >
