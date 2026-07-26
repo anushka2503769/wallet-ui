@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TrendingUp, TrendingDown, Radio, Cpu, LineChart as LineChartIcon, ListOrdered, Percent } from 'lucide-react';
 import {
   LineChart,
@@ -37,10 +37,15 @@ function formatPrice(value, currency) {
 }
 
 function Markets() {
+  const { user } = useAuth();
+  // Every trade, order, wallet, and holdings call is scoped to this — the
+  // node rejects trades/orders without a user_id with "User not logged in".
+  const userId = user?.email || null;
+
   const [markets, setMarkets] = useState([]);
   const [wallet, setWallet] = useState(null);
   const [connected, setConnected] = useState(false);
-  const { user } = useAuth();
+  const [mempool, setMempool] = useState([]);
 
   // Per-symbol flash direction, cleared a moment after each update.
   const [flash, setFlash] = useState({});
@@ -76,8 +81,10 @@ function Markets() {
   const [queueResult, setQueueResult] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
 
-  // Fees
+  // Fees — read from the node rather than hardcoded, so this always
+  // matches whatever --fee-bps the node was actually started with.
   const [fees, setFees] = useState(null);
+  const feeRate = fees ? fees.fee_percent / 100 : 0;
 
   function applyUpdate(entry) {
     const prevPrice = prevPrices.current[entry.symbol];
@@ -140,17 +147,51 @@ function Markets() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartAsset]);
 
-  // Wallet
+  // Pending (unmined) transactions — used for the queue-activity stats below
+  async function refreshMempool() {
+    try {
+      const res = await fetch(`${NODE_URL}/mempool`);
+      const data = await res.json();
+      setMempool(Array.isArray(data) ? data : []);
+    } catch {
+      setMempool([]);
+    }
+  }
+  useEffect(() => {
+    refreshMempool();
+  }, []);
+
+  // Wallet — lazily create one for this user the first time they show up,
+  // then fetch its balance. Skipped entirely while logged out.
   function refreshWallet() {
-    if (!user) return;
-    fetch(`${NODE_URL}/wallet?user_id=${encodeURIComponent(user.email)}`)
+    if (!userId) {
+      setWallet(null);
+      return;
+    }
+
+    fetch(`${NODE_URL}/wallet?user_id=${encodeURIComponent(userId)}`)
       .then((res) => res.json())
       .then(setWallet)
       .catch(console.error);
   }
-  useEffect(refreshWallet, [user]);
 
-  // Fees
+  useEffect(() => {
+    if (!userId) {
+      setWallet(null);
+      return;
+    }
+
+    fetch(`${NODE_URL}/wallet/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId }),
+    })
+      .catch(() => {})
+      .finally(refreshWallet);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // Fees — global to the node, not per-user
   function refreshFees() {
     fetch(`${NODE_URL}/fees`)
       .then((res) => res.json())
@@ -159,14 +200,19 @@ function Markets() {
   }
   useEffect(refreshFees, []);
 
-  // Holdings
+  // Holdings — per-user, like the wallet
   function refreshHoldings() {
-    fetch(`${NODE_URL}/holdings`)
+    if (!userId) {
+      setHoldings({ balances: {} });
+      return;
+    }
+
+    fetch(`${NODE_URL}/holdings?user_id=${encodeURIComponent(userId)}`)
       .then((res) => res.json())
       .then(setHoldings)
       .catch(console.error);
   }
-  useEffect(refreshHoldings, []);
+  useEffect(refreshHoldings, [userId]);
 
   // Price history + order book + fills for whichever commodity is selected
   function refreshChartAssetData(asset) {
@@ -205,8 +251,45 @@ function Markets() {
   const selectedChartMarket = markets.find((m) => m.symbol === chartAsset);
   const chartHoldingQty = holdings.balances?.[chartAsset] ?? 0;
 
+  const notionalValue = selectedMarket && tradeForm.action !== 'CLOSE_POSITION'
+    ? (parseFloat(tradeForm.quantity) || 0) * selectedMarket.price
+    : null;
+  const estimatedFee = notionalValue != null ? notionalValue * feeRate : null;
+
+  // Rough breakdown of what's sitting in the mempool right now, for the
+  // "queue activity" stats — buys/longs vs sells/shorts, still unmined.
+  const queueSummary = useMemo(() => {
+    const summary = { bid: 0, sell: 0 };
+
+    for (const tx of mempool) {
+      const action = String(tx.contract_action || '').toUpperCase();
+      const direction = String(tx.trade?.direction || '').toUpperCase();
+
+      if (action === 'CLOSE_POSITION' || action === 'CANCEL_ORDER') continue;
+
+      if (action === 'PLACE_BID') { summary.bid += 1; continue; }
+      if (action === 'PLACE_ASK') { summary.sell += 1; continue; }
+
+      if (action === 'BUY_OPTION') {
+        if (direction === 'PUT') summary.sell += 1;
+        else summary.bid += 1;
+        continue;
+      }
+
+      if (direction === 'SHORT' || direction === 'PUT') summary.sell += 1;
+      else summary.bid += 1;
+    }
+
+    return summary;
+  }, [mempool]);
+
   async function handleSubmitTrade(e) {
     e.preventDefault();
+
+    if (!userId) {
+      setTradeResult({ ok: false, data: { error: 'Log in first to submit a trade.' } });
+      return;
+    }
 
     setTradeBusy(true);
     setTradeResult(null);
@@ -235,7 +318,7 @@ function Markets() {
 
         tx = {
           id: '',
-          user_id: user?.email || null,
+          user_id: userId,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_FUTURES',
 
@@ -251,7 +334,7 @@ function Markets() {
 
         tx = {
           id: '',
-          user_id: user?.email || null,
+          user_id: userId,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_PERPETUAL',
 
@@ -267,7 +350,7 @@ function Markets() {
 
         tx = {
           id: '',
-          user_id: user?.email || null,
+          user_id: userId,
           contract_code: 'CommodityTrading',
           contract_action: 'BUY_OPTION',
 
@@ -282,7 +365,7 @@ function Markets() {
 
         tx = {
           id: '',
-          user_id: user?.email || null,
+          user_id: userId,
           contract_code: tradeForm.positionId,
           contract_action: 'CLOSE_POSITION',
         };
@@ -303,6 +386,8 @@ function Markets() {
         ok: res.ok,
         data,
       });
+
+      await refreshMempool();
 
     } catch (err) {
 
@@ -337,11 +422,17 @@ function Markets() {
     refreshHoldings();
     refreshFees();
     refreshChartAssetData(chartAsset);
+    await refreshMempool();
   }
 
   async function handlePlaceOrder(e) {
     e.preventDefault();
     if (!chartAsset) return;
+
+    if (!userId) {
+      setQueueResult({ ok: false, message: 'Log in first to place an order.' });
+      return;
+    }
 
     setQueueBusy(true);
     setQueueResult(null);
@@ -357,7 +448,7 @@ function Markets() {
 
     const tx = {
       id: '',
-      user_id: user?.email || null,
+      user_id: userId,
       contract_code: 'CommodityTrading',
       contract_action: queueForm.side, // PLACE_BID or PLACE_ASK
       trade: {
@@ -380,6 +471,7 @@ function Markets() {
         message: 'Order submitted to the mempool — mine a block to attempt matching it.',
       });
       setQueueForm((f) => ({ ...f, price: '', quantity: '' }));
+      await refreshMempool();
     } catch (err) {
       setQueueResult({ ok: false, message: err.message });
     }
@@ -388,11 +480,16 @@ function Markets() {
   }
 
   async function handleCancelOrder(order) {
+    if (!userId) {
+      setQueueResult({ ok: false, message: 'Log in first to manage orders.' });
+      return;
+    }
+
     setCancellingId(order.id);
 
     const tx = {
       id: '',
-      user_id: user?.email || null,
+      user_id: userId,
       contract_code: order.id,
       contract_action: 'CANCEL_ORDER',
       trade: { asset: chartAsset, quantity: 0, direction: '' },
@@ -405,6 +502,7 @@ function Markets() {
         body: JSON.stringify(tx),
       });
       setQueueResult({ ok: true, message: 'Cancellation submitted — mine a block to apply it.' });
+      await refreshMempool();
     } catch (err) {
       setQueueResult({ ok: false, message: err.message });
     }
@@ -425,11 +523,19 @@ function Markets() {
         </span>
       </div>
 
+      {!userId && (
+        <div className="card" style={{ marginBottom: 'var(--sp-6)', borderColor: 'var(--accent)' }}>
+          <p className="text-sm" style={{ margin: 0 }}>
+            Log in to trade, place orders, and see your wallet/holdings. You can still watch live prices while logged out.
+          </p>
+        </div>
+      )}
+
       <div className="stats-grid" style={{ marginBottom: 'var(--sp-6)' }}>
         <div className="card">
           <div className="stat-block">
             <span className="stat-label">Wallet Balance</span>
-            <span className="stat-value">${wallet ? wallet.balance.toFixed(2) : 'Loading...'}</span>
+            <span className="stat-value">{userId && wallet ? `$${wallet.balance.toFixed(2)}` : '—'}</span>
           </div>
         </div>
 
@@ -451,6 +557,27 @@ function Markets() {
             <span className="stat-value">
               {fees ? `$${fees.treasury_collected.toFixed(2)}` : '—'}
             </span>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="stat-block">
+            <span className="stat-label">Pending Orders</span>
+            <span className="stat-value">{mempool.length}</span>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="stat-block">
+            <span className="stat-label">Bid Queue</span>
+            <span className="stat-value">{queueSummary.bid}</span>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="stat-block">
+            <span className="stat-label">Sell Queue</span>
+            <span className="stat-value">{queueSummary.sell}</span>
           </div>
         </div>
       </div>
@@ -660,6 +787,12 @@ function Markets() {
                   }
                 />
 
+                {estimatedFee != null && selectedMarket && (
+                  <p className="text-xs text-muted" style={{ margin: '4px 0 0' }}>
+                    Estimated fee: {formatPrice(estimatedFee, selectedMarket.currency)}
+                  </p>
+                )}
+
               </div>
             )}
 
@@ -789,10 +922,12 @@ function Markets() {
             <button
               type="submit"
               className="cute-button btn-full"
-              disabled={tradeBusy}
+              disabled={tradeBusy || !userId}
             >
               {tradeBusy
                 ? 'Submitting...'
+                : !userId
+                ? 'Log in to trade'
                 : 'Submit Trade to Mempool'}
             </button>
 
@@ -878,22 +1013,28 @@ function Markets() {
             {orderBook.bids.length === 0 && (
               <p className="text-xs text-muted" style={{ margin: 0 }}>No resting bids.</p>
             )}
-            {orderBook.bids.map((order) => (
-              <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
-                <span className="font-mono" style={{ color: 'var(--success)' }}>
-                  {formatPrice(order.price, selectedChartMarket?.currency)}
-                </span>
-                <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  type="button"
-                  disabled={cancellingId === order.id}
-                  onClick={() => handleCancelOrder(order)}
-                >
-                  {cancellingId === order.id ? '…' : 'Cancel'}
-                </button>
-              </div>
-            ))}
+            {orderBook.bids.map((order) => {
+              const isMine = userId && order.user_id === userId;
+              return (
+                <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
+                  <span className="font-mono" style={{ color: 'var(--success)' }}>
+                    {formatPrice(order.price, selectedChartMarket?.currency)}
+                  </span>
+                  <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
+                  <span className="text-xs text-muted">{isMine ? 'You' : 'other trader'}</span>
+                  {isMine && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      type="button"
+                      disabled={cancellingId === order.id}
+                      onClick={() => handleCancelOrder(order)}
+                    >
+                      {cancellingId === order.id ? '…' : 'Cancel'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Asks */}
@@ -902,22 +1043,28 @@ function Markets() {
             {orderBook.asks.length === 0 && (
               <p className="text-xs text-muted" style={{ margin: 0 }}>No resting asks.</p>
             )}
-            {orderBook.asks.map((order) => (
-              <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
-                <span className="font-mono" style={{ color: 'var(--danger)' }}>
-                  {formatPrice(order.price, selectedChartMarket?.currency)}
-                </span>
-                <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  type="button"
-                  disabled={cancellingId === order.id}
-                  onClick={() => handleCancelOrder(order)}
-                >
-                  {cancellingId === order.id ? '…' : 'Cancel'}
-                </button>
-              </div>
-            ))}
+            {orderBook.asks.map((order) => {
+              const isMine = userId && order.user_id === userId;
+              return (
+                <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
+                  <span className="font-mono" style={{ color: 'var(--danger)' }}>
+                    {formatPrice(order.price, selectedChartMarket?.currency)}
+                  </span>
+                  <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
+                  <span className="text-xs text-muted">{isMine ? 'You' : 'other trader'}</span>
+                  {isMine && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      type="button"
+                      disabled={cancellingId === order.id}
+                      onClick={() => handleCancelOrder(order)}
+                    >
+                      {cancellingId === order.id ? '…' : 'Cancel'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -965,9 +1112,9 @@ function Markets() {
             type="submit"
             className="cute-button btn-full"
             style={{ gridColumn: '1 / -1' }}
-            disabled={queueBusy || !chartAsset}
+            disabled={queueBusy || !chartAsset || !userId}
           >
-            {queueBusy ? 'Submitting…' : `Place ${queueForm.side === 'PLACE_BID' ? 'Bid' : 'Ask'}`}
+            {queueBusy ? 'Submitting…' : !userId ? 'Log in to place orders' : `Place ${queueForm.side === 'PLACE_BID' ? 'Bid' : 'Ask'}`}
           </button>
         </form>
 
