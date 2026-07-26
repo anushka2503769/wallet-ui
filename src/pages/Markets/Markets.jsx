@@ -1,14 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { TrendingUp, TrendingDown, Radio, Cpu, LineChart as LineChartIcon, ListOrdered, Percent } from 'lucide-react';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { TrendingUp, TrendingDown, Radio, Cpu } from 'lucide-react';
 
 // Use whatever host the page itself was loaded from (localhost, a LAN IP,
 // or a Tailscale/VPN address) so this works whether you're on the same
@@ -45,7 +36,7 @@ function Markets() {
   const prevPrices = useRef({});
   const flashTimers = useRef({});
 
-  // Trade form (futures / perpetual / options / close)
+  // Trade form
   const [tradeForm, setTradeForm] = useState({
     asset: '',
     action: 'OPEN_FUTURES',
@@ -60,22 +51,6 @@ function Markets() {
   // Mining
   const [mining, setMining] = useState(false);
   const [minedBlock, setMinedBlock] = useState(null);
-
-  // Which commodity the chart / trading queue section below is showing
-  const [chartAsset, setChartAsset] = useState('');
-  const [priceHistory, setPriceHistory] = useState([]);
-
-  // Trading queue (order book)
-  const [orderBook, setOrderBook] = useState({ bids: [], asks: [] });
-  const [fills, setFills] = useState([]);
-  const [holdings, setHoldings] = useState({ balances: {} });
-  const [queueForm, setQueueForm] = useState({ side: 'PLACE_BID', price: '', quantity: '' });
-  const [queueBusy, setQueueBusy] = useState(false);
-  const [queueResult, setQueueResult] = useState(null);
-  const [cancellingId, setCancellingId] = useState(null);
-
-  // Fees
-  const [fees, setFees] = useState(null);
 
   function applyUpdate(entry) {
     const prevPrice = prevPrices.current[entry.symbol];
@@ -97,12 +72,6 @@ function Markets() {
       else next[idx] = entry;
       return next.sort((a, b) => a.symbol.localeCompare(b.symbol));
     });
-
-    // Keep the chart's own running history moving in near-real-time too,
-    // without waiting for the next poll of /markets/history.
-    if (entry.symbol === chartAsset) {
-      setPriceHistory((prev) => [...prev, { timestamp: entry.updated_at, price: entry.price }].slice(-200));
-    }
   }
 
   // Initial snapshot
@@ -114,7 +83,6 @@ function Markets() {
         data.forEach((m) => { prevPrices.current[m.symbol] = m.price; });
         if (data.length) {
           setTradeForm((f) => (f.asset ? f : { ...f, asset: data[0].symbol }));
-          setChartAsset((prev) => prev || data[0].symbol);
         }
       })
       .catch(console.error);
@@ -135,72 +103,17 @@ function Markets() {
     };
 
     return () => source.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartAsset]);
+  }, []);
 
   // Wallet
-  function refreshWallet() {
+  useEffect(() => {
     fetch(`${NODE_URL}/wallet`)
       .then((res) => res.json())
       .then(setWallet)
       .catch(console.error);
-  }
-  useEffect(refreshWallet, []);
-
-  // Fees
-  function refreshFees() {
-    fetch(`${NODE_URL}/fees`)
-      .then((res) => res.json())
-      .then(setFees)
-      .catch(console.error);
-  }
-  useEffect(refreshFees, []);
-
-  // Holdings
-  function refreshHoldings() {
-    fetch(`${NODE_URL}/holdings`)
-      .then((res) => res.json())
-      .then(setHoldings)
-      .catch(console.error);
-  }
-  useEffect(refreshHoldings, []);
-
-  // Price history + order book + fills for whichever commodity is selected
-  function refreshChartAssetData(asset) {
-    if (!asset) return;
-
-    fetch(`${NODE_URL}/markets/history/${asset}?limit=200`)
-      .then((res) => res.json())
-      .then(setPriceHistory)
-      .catch(console.error);
-
-    fetch(`${NODE_URL}/orderbook/${asset}`)
-      .then((res) => res.json())
-      .then(setOrderBook)
-      .catch(console.error);
-
-    fetch(`${NODE_URL}/orderbook/${asset}/fills`)
-      .then((res) => res.json())
-      .then(setFills)
-      .catch(console.error);
-  }
-
-  useEffect(() => {
-    refreshChartAssetData(chartAsset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartAsset]);
-
-  // Order books/fills/history only change when a block gets mined, so a
-  // light poll keeps this section current without needing its own SSE feed.
-  useEffect(() => {
-    const interval = setInterval(() => refreshChartAssetData(chartAsset), 10000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartAsset]);
+  }, []);
 
   const selectedMarket = markets.find((m) => m.symbol === tradeForm.asset);
-  const selectedChartMarket = markets.find((m) => m.symbol === chartAsset);
-  const chartHoldingQty = holdings.balances?.[chartAsset] ?? 0;
 
   async function handleSubmitTrade(e) {
     e.preventDefault();
@@ -323,84 +236,6 @@ function Markets() {
     }
 
     setMining(false);
-
-    // Mining is the only thing that actually changes wallet/holdings/order
-    // book/treasury state, so refresh everything that could have moved.
-    refreshWallet();
-    refreshHoldings();
-    refreshFees();
-    refreshChartAssetData(chartAsset);
-  }
-
-  async function handlePlaceOrder(e) {
-    e.preventDefault();
-    if (!chartAsset) return;
-
-    setQueueBusy(true);
-    setQueueResult(null);
-
-    const price = parseFloat(queueForm.price) || 0;
-    const quantity = parseFloat(queueForm.quantity) || 0;
-
-    if (price <= 0 || quantity <= 0) {
-      setQueueResult({ ok: false, message: 'Enter a price and quantity greater than 0.' });
-      setQueueBusy(false);
-      return;
-    }
-
-    const tx = {
-      id: '',
-      contract_code: 'CommodityTrading',
-      contract_action: queueForm.side, // PLACE_BID or PLACE_ASK
-      trade: {
-        asset: chartAsset,
-        quantity,
-        direction: queueForm.side === 'PLACE_BID' ? 'BUY' : 'SELL',
-        price,
-      },
-    };
-
-    try {
-      await fetch(`${NODE_URL}/tx/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tx),
-      });
-
-      setQueueResult({
-        ok: true,
-        message: 'Order submitted to the mempool — mine a block to attempt matching it.',
-      });
-      setQueueForm((f) => ({ ...f, price: '', quantity: '' }));
-    } catch (err) {
-      setQueueResult({ ok: false, message: err.message });
-    }
-
-    setQueueBusy(false);
-  }
-
-  async function handleCancelOrder(order) {
-    setCancellingId(order.id);
-
-    const tx = {
-      id: '',
-      contract_code: order.id,
-      contract_action: 'CANCEL_ORDER',
-      trade: { asset: chartAsset, quantity: 0, direction: '' },
-    };
-
-    try {
-      await fetch(`${NODE_URL}/tx/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tx),
-      });
-      setQueueResult({ ok: true, message: 'Cancellation submitted — mine a block to apply it.' });
-    } catch (err) {
-      setQueueResult({ ok: false, message: err.message });
-    }
-
-    setCancellingId(null);
   }
 
   return (
@@ -416,46 +251,17 @@ function Markets() {
         </span>
       </div>
 
-      <div className="stats-grid" style={{ marginBottom: 'var(--sp-6)' }}>
-        <div className="card">
-          <div className="stat-block">
-            <span className="stat-label">Wallet Balance</span>
-            <span className="stat-value">${wallet ? wallet.balance.toFixed(2) : 'Loading...'}</span>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="stat-block">
-            <span className="stat-label">
-              <Percent size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-              Trading Fee
-            </span>
-            <span className="stat-value">
-              {fees ? `${fees.fee_percent.toFixed(2)}%` : '—'}
-            </span>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="stat-block">
-            <span className="stat-label">Fees Collected (treasury)</span>
-            <span className="stat-value">
-              {fees ? `$${fees.treasury_collected.toFixed(2)}` : '—'}
-            </span>
-          </div>
-        </div>
-      </div>
+      <h1 style={{ marginBottom: 'var(--sp-4)' }}>
+        Wallet Balance: ${wallet ? wallet.balance.toFixed(2) : 'Loading...'}
+      </h1>
 
       <div className="grid-auto">
         {markets.map((market) => (
           <div
             key={market.symbol}
             className="card"
-            onClick={() => setChartAsset(market.symbol)}
             style={{
-              cursor: 'pointer',
               transition: 'background-color 0.3s',
-              border: chartAsset === market.symbol ? '1px solid var(--accent)' : undefined,
               backgroundColor:
                 flash[market.symbol] === 'up'
                   ? 'color-mix(in srgb, var(--success) 12%, transparent)'
@@ -491,58 +297,6 @@ function Markets() {
             </div>
           </div>
         ))}
-      </div>
-
-      {/* Price movement chart for whichever commodity card is selected above */}
-      <div className="card flex col gap-4" style={{ marginTop: 'var(--sp-6)' }}>
-        <div className="flex-between">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-            <LineChartIcon size={18} style={{ color: 'var(--accent)' }} />
-            <h3 style={{ margin: 0 }}>
-              {selectedChartMarket ? `${selectedChartMarket.symbol} Price Movement` : 'Price Movement'}
-            </h3>
-          </div>
-          <span className="text-xs text-muted">
-            {priceHistory.length} samples
-          </span>
-        </div>
-        <div className="divider" style={{ margin: 0 }} />
-
-        <div style={{ width: '100%', height: 260 }}>
-          {priceHistory.length > 1 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={priceHistory}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis
-                  dataKey="timestamp"
-                  tickFormatter={(ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  tick={{ fontSize: 11 }}
-                  minTickGap={40}
-                />
-                <YAxis
-                  domain={['auto', 'auto']}
-                  tick={{ fontSize: 11 }}
-                  width={70}
-                  tickFormatter={(v) => formatPrice(v, selectedChartMarket?.currency)}
-                />
-                <Tooltip
-                  labelFormatter={(ts) => new Date(ts * 1000).toLocaleString()}
-                  formatter={(value) => [formatPrice(value, selectedChartMarket?.currency), 'Price']}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="price"
-                  stroke="var(--accent)"
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-muted">Not enough history yet — check back after a few price refreshes.</p>
-          )}
-        </div>
       </div>
 
       <div className="grid-2" style={{ marginTop: 'var(--sp-6)' }}>
@@ -808,8 +562,8 @@ function Markets() {
         <div className="card flex col gap-4">
           <h3>Create Block</h3>
           <p className="text-sm text-muted">
-            Mines a new block. Any pending trades or queue orders in the mempool are
-            executed against the live commodity feed at the moment of mining.
+            Mines a new block. Any pending trades in the mempool are priced against the
+            live commodity feed at the moment of mining.
           </p>
 
           <button
@@ -845,144 +599,6 @@ function Markets() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Trading queue — bid/ask order book for whichever commodity is selected above */}
-      <div className="card flex col gap-4" style={{ marginTop: 'var(--sp-6)' }}>
-        <div className="flex-between">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-            <ListOrdered size={18} style={{ color: 'var(--accent)' }} />
-            <h3 style={{ margin: 0 }}>
-              {chartAsset ? `${chartAsset} Trading Queue` : 'Trading Queue'}
-            </h3>
-          </div>
-          <span className="text-xs text-muted">
-            Holdings: {chartHoldingQty} {selectedChartMarket?.unit || ''}
-          </span>
-        </div>
-        <div className="divider" style={{ margin: 0 }} />
-
-        <div className="grid-2">
-          {/* Bids */}
-          <div className="flex col gap-2">
-            <span className="text-xs text-muted" style={{ fontWeight: 600 }}>BIDS (buy orders)</span>
-            {orderBook.bids.length === 0 && (
-              <p className="text-xs text-muted" style={{ margin: 0 }}>No resting bids.</p>
-            )}
-            {orderBook.bids.map((order) => (
-              <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
-                <span className="font-mono" style={{ color: 'var(--success)' }}>
-                  {formatPrice(order.price, selectedChartMarket?.currency)}
-                </span>
-                <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  type="button"
-                  disabled={cancellingId === order.id}
-                  onClick={() => handleCancelOrder(order)}
-                >
-                  {cancellingId === order.id ? '…' : 'Cancel'}
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Asks */}
-          <div className="flex col gap-2">
-            <span className="text-xs text-muted" style={{ fontWeight: 600 }}>ASKS (sell orders)</span>
-            {orderBook.asks.length === 0 && (
-              <p className="text-xs text-muted" style={{ margin: 0 }}>No resting asks.</p>
-            )}
-            {orderBook.asks.map((order) => (
-              <div key={order.id} className="flex-between text-xs" style={{ padding: 'var(--sp-2) 0' }}>
-                <span className="font-mono" style={{ color: 'var(--danger)' }}>
-                  {formatPrice(order.price, selectedChartMarket?.currency)}
-                </span>
-                <span className="font-mono text-muted">{order.remaining} {selectedChartMarket?.unit}</span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  type="button"
-                  disabled={cancellingId === order.id}
-                  onClick={() => handleCancelOrder(order)}
-                >
-                  {cancellingId === order.id ? '…' : 'Cancel'}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="divider" style={{ margin: 0 }} />
-
-        {/* Place order form */}
-        <form onSubmit={handlePlaceOrder} className="grid-3" style={{ alignItems: 'end', gap: 'var(--sp-4)' }}>
-          <div className="form-group">
-            <label className="form-label">Side</label>
-            <select
-              className="form-input"
-              value={queueForm.side}
-              onChange={(e) => setQueueForm((f) => ({ ...f, side: e.target.value }))}
-            >
-              <option value="PLACE_BID">Bid (buy)</option>
-              <option value="PLACE_ASK">Ask (sell)</option>
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Limit Price</label>
-            <input
-              className="form-input"
-              type="number"
-              step="any"
-              placeholder={selectedChartMarket ? formatPrice(selectedChartMarket.price, selectedChartMarket.currency) : '0.00'}
-              value={queueForm.price}
-              onChange={(e) => setQueueForm((f) => ({ ...f, price: e.target.value }))}
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Quantity {selectedChartMarket ? `(${selectedChartMarket.unit})` : ''}</label>
-            <input
-              className="form-input"
-              type="number"
-              step="any"
-              min={selectedChartMarket?.min_quantity ?? undefined}
-              value={queueForm.quantity}
-              onChange={(e) => setQueueForm((f) => ({ ...f, quantity: e.target.value }))}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="cute-button btn-full"
-            style={{ gridColumn: '1 / -1' }}
-            disabled={queueBusy || !chartAsset}
-          >
-            {queueBusy ? 'Submitting…' : `Place ${queueForm.side === 'PLACE_BID' ? 'Bid' : 'Ask'}`}
-          </button>
-        </form>
-
-        {queueResult && (
-          <div className="text-xs" style={{ color: queueResult.ok ? 'var(--success)' : 'var(--danger)' }}>
-            {queueResult.message}
-          </div>
-        )}
-
-        {fills.length > 0 && (
-          <>
-            <div className="divider" style={{ margin: 0 }} />
-            <span className="text-xs text-muted" style={{ fontWeight: 600 }}>RECENT FILLS</span>
-            <div className="flex col gap-1">
-              {fills.slice().reverse().slice(0, 10).map((fill, i) => (
-                <div key={i} className="flex-between text-xs text-muted">
-                  <span className="font-mono">{formatPrice(fill.price, selectedChartMarket?.currency)}</span>
-                  <span className="font-mono">{fill.quantity} {selectedChartMarket?.unit}</span>
-                  <span>{new Date(fill.timestamp * 1000).toLocaleTimeString()}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
