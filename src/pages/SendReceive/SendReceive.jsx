@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowUpRight, ArrowDownLeft, CheckCircle2, Loader2 } from 'lucide-react';
 import { walletService } from '../../services/api/walletService';
 import { useAuth } from '../../context/AuthContext';
@@ -10,6 +10,25 @@ function SendReceive() {
     address: '',
     amount: ''
   });
+
+  const [copied, setCopied] = useState(false);
+
+  // The initial state above only runs once at mount — keep user_id current
+  // if the user logs in/out while this page is already open.
+  useEffect(() => {
+    setFormData((prev) => ({ ...prev, user_id: user?.email || null }));
+  }, [user]);
+
+  const handleCopyAddress = async () => {
+    if (!user?.address) return;
+    try {
+      await navigator.clipboard.writeText(user.address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy address: ', err);
+    }
+  };
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -23,6 +42,12 @@ function SendReceive() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!user) {
+      console.error('Cannot send: not logged in.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -83,13 +108,15 @@ function SendReceive() {
             <button 
               type="submit" 
               className="btn btn-primary btn-full mt-2" 
-              disabled={loading}
+              disabled={loading || !user}
             >
               {loading ? (
                 <>
                   <span className="spinner"></span>
                   Processing...
                 </>
+              ) : !user ? (
+                'Log in to send'
               ) : (
                 'Send Transaction'
               )}
@@ -111,8 +138,17 @@ function SendReceive() {
             </div>
 
             <div className="address-display btn-full">
-              <span className="address-text">0x7B3A4CFA9128A8D19B3A</span>
+              <span className="address-text" title={user?.address}>
+                {user?.address || 'Log in to see your address'}
+              </span>
             </div>
+
+            {user?.address && (
+              <button className="cute-button" type="button" onClick={handleCopyAddress}>
+                {copied ? 'Copied!' : 'Copy Address'}
+              </button>
+            )}
+
             <span className="text-xs text-muted">Share your public address to receive assets</span>
           </div>
         </div>

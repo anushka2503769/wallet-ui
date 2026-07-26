@@ -1823,6 +1823,65 @@ async fn admin_add_commodity(
     }
 }
 
+#[derive(Deserialize)]
+struct GrantHoldingsRequest {
+    /// The recipient's wallet address (user id)
+    user_id: String,
+    /// Commodity symbol, e.g. "xGOLD"
+    asset: String,
+    /// Amount to grant — added on top of whatever they already hold
+    quantity: f64,
+}
+
+// Grants a quantity of a commodity directly to a user's holdings, no trade
+// or counterparty required — e.g. seeding a test account, or crediting
+// someone outside the normal buy/sell flow. Admin-only: requires the
+// x-admin-key header to match this node's configured admin key.
+#[post("/admin/holdings/grant")]
+async fn admin_grant_holdings(
+    data: web::Data<AppState>,
+    http_req: HttpRequest,
+    body: web::Json<GrantHoldingsRequest>,
+) -> impl Responder {
+    if !is_admin(&http_req, &data.admin_key) {
+        return HttpResponse::Unauthorized().body("Invalid or missing x-admin-key header");
+    }
+
+    let body = body.into_inner();
+
+    if body.user_id.trim().is_empty() {
+        return HttpResponse::BadRequest().body("user_id (wallet address) is required");
+    }
+
+    if body.asset.trim().is_empty() {
+        return HttpResponse::BadRequest().body("asset is required");
+    }
+
+    if body.quantity <= 0.0 {
+        return HttpResponse::BadRequest().body("quantity must be greater than 0");
+    }
+
+    // Only allow granting commodities the node actually tracks — otherwise
+    // an admin could credit an asset that can never be priced or traded.
+    if data.price_feed.min_quantity(&body.asset).is_none() {
+        return HttpResponse::BadRequest()
+            .body(format!("'{}' is not a tracked commodity", body.asset));
+    }
+
+    let key = holdings_key(&body.user_id);
+
+    let mut holdings = data
+        .engine
+        .get_json_state::<Holdings>(&key)
+        .unwrap_or_default();
+
+    *holdings.balances.entry(body.asset.clone()).or_insert(0.0) += body.quantity;
+
+    data.engine.put_json_state(&key, &holdings);
+
+    HttpResponse::Ok().json(holdings)
+}
+
 // ===================== P2P ENDPOINTS =====================
 
 // Connect this node to another node's address. Registers with them and
@@ -2179,6 +2238,7 @@ async fn main() -> std::io::Result<()> {
             .service(p2p_chain)
             .service(p2p_announce_block)
             .service(admin_add_commodity)
+            .service(admin_grant_holdings)
             .service(get_orderbook)
             .service(get_orderbook_fills)
             .service(get_holdings)

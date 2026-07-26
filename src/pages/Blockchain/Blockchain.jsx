@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import {
   Layers,
   Send,
@@ -99,7 +100,20 @@ async function proxyGet(path) {
 
 // ─── Sub-components ──────────────────────────────────────────
 
-function NodeStatusBar({ nodeOnline, checking, onRefresh }) {
+function NodeStatusBar({ nodeOnline, checking, onRefresh, userAddress }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!userAddress) return;
+    try {
+      await navigator.clipboard.writeText(userAddress);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy address: ', err);
+    }
+  };
+
   return (
     <div
       className="card flex-between"
@@ -122,16 +136,32 @@ function NodeStatusBar({ nodeOnline, checking, onRefresh }) {
         <span className="badge badge-muted" style={{ fontSize: '0.72rem' }}>PoS</span>
       </div>
 
-      <button
-        className="btn btn-ghost btn-sm"
-        onClick={onRefresh}
-        disabled={checking}
-        type="button"
-        style={{ gap: 6 }}
-      >
-        <RefreshCw size={14} style={{ animation: checking ? 'spin 1s linear infinite' : 'none' }} />
-        {checking ? 'Checking…' : 'Refresh'}
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}>
+        {userAddress ? (
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="btn btn-ghost btn-sm font-mono"
+            title="Click to copy your blockchain address"
+            style={{ fontSize: '0.78rem', gap: 6 }}
+          >
+            {copied ? 'Copied!' : `${userAddress.slice(0, 6)}…${userAddress.slice(-4)}`}
+          </button>
+        ) : (
+          <span className="text-xs text-muted">Log in to see your address</span>
+        )}
+
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={onRefresh}
+          disabled={checking}
+          type="button"
+          style={{ gap: 6 }}
+        >
+          <RefreshCw size={14} style={{ animation: checking ? 'spin 1s linear infinite' : 'none' }} />
+          {checking ? 'Checking…' : 'Refresh'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -326,6 +356,8 @@ function LogTerminal({ logs, running }) {
 
 // ─── Main Page ────────────────────────────────────────────────
 function Blockchain() {
+  const { user } = useAuth();
+
   // Node state
   const [nodeOnline, setNodeOnline] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -369,6 +401,11 @@ function Blockchain() {
   });
   const [commodityBusy, setCommodityBusy] = useState(false);
   const [commodityResult, setCommodityResult] = useState(null);
+
+  const [grantForm, setGrantForm] = useState({ userId: '', asset: '', quantity: '' });
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [grantResult, setGrantResult] = useState(null);
+  const [markets, setMarkets] = useState([]);
 
   // ── Log helper ──
   function log(...lines) {
@@ -572,6 +609,54 @@ function Blockchain() {
     setCommodityBusy(false);
   }
 
+  // ── Admin: grant holdings ──
+  async function fetchMarketsForAdmin() {
+    try {
+      const data = await apiGet('/markets');
+      setMarkets(Array.isArray(data) ? data : []);
+      if (Array.isArray(data) && data.length) {
+        setGrantForm((f) => (f.asset ? f : { ...f, asset: data[0].symbol }));
+      }
+    } catch {
+      // Best-effort — the grant form just falls back to a free-text input.
+    }
+  }
+
+  async function handleGrantHoldings(e) {
+    e.preventDefault();
+
+    if (!adminKey) return;
+
+    setGrantBusy(true);
+    setGrantResult(null);
+
+    try {
+      const data = await apiPostWithHeaders(
+        '/admin/holdings/grant',
+        {
+          user_id: grantForm.userId.trim(),
+          asset: grantForm.asset,
+          quantity: parseFloat(grantForm.quantity) || 0,
+        },
+        { 'x-admin-key': adminKey }
+      );
+
+      const newBalance = data?.balances?.[grantForm.asset];
+
+      setGrantResult({
+        ok: true,
+        message: `Granted ${grantForm.quantity} ${grantForm.asset} to ${grantForm.userId}.` +
+          (newBalance != null ? ` New balance: ${newBalance}.` : ''),
+      });
+
+      setGrantForm((f) => ({ ...f, quantity: '' }));
+    } catch (e) {
+      setGrantResult({ ok: false, message: e.message });
+    }
+
+    setGrantBusy(false);
+  }
+
   // ── Tab data load ──
   useEffect(() => {
     if (activeTab === 'explorer' && !blocksLoaded) {
@@ -579,6 +664,9 @@ function Blockchain() {
     }
     if (activeTab === 'network') {
       fetchPeers();
+    }
+    if (activeTab === 'admin') {
+      fetchMarketsForAdmin();
     }
   }, [activeTab]);
 
@@ -602,7 +690,7 @@ function Blockchain() {
       </div>
 
       {/* Node status bar */}
-      <NodeStatusBar nodeOnline={nodeOnline} checking={checking} onRefresh={checkNode} />
+      <NodeStatusBar nodeOnline={nodeOnline} checking={checking} onRefresh={checkNode} userAddress={user?.address} />
 
       {/* Stats strip */}
       <StatStrip
@@ -1178,6 +1266,97 @@ function Blockchain() {
                 style={{ color: commodityResult.ok ? 'var(--success)' : 'var(--danger)' }}
               >
                 {commodityResult.message}
+              </div>
+            )}
+          </div>
+
+          <div className="card flex col gap-4">
+            <h3>Grant Holdings</h3>
+
+            <p className="text-sm text-muted" style={{ margin: 0 }}>
+              Credit a quantity of a commodity directly to any user's holdings —
+              no trade or counterparty needed. Useful for seeding a test account
+              or crediting someone outside the normal buy/sell flow.
+            </p>
+
+            <form onSubmit={handleGrantHoldings} className="flex col gap-4">
+              <div className="form-group">
+                <label className="form-label">User Wallet Address</label>
+                <input
+                  className="form-input mono"
+                  placeholder="user@example.com"
+                  value={grantForm.userId}
+                  onChange={(e) => setGrantForm((f) => ({ ...f, userId: e.target.value }))}
+                  required
+                />
+              </div>
+
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label">Commodity</label>
+                  {markets.length > 0 ? (
+                    <select
+                      className="form-input"
+                      value={grantForm.asset}
+                      onChange={(e) => setGrantForm((f) => ({ ...f, asset: e.target.value }))}
+                    >
+                      {markets.map((m) => (
+                        <option key={m.symbol} value={m.symbol}>
+                          {m.symbol} — {m.contract_name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="form-input mono"
+                      placeholder="xGOLD"
+                      value={grantForm.asset}
+                      onChange={(e) => setGrantForm((f) => ({ ...f, asset: e.target.value.toUpperCase() }))}
+                      required
+                    />
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">
+                    Quantity {markets.find((m) => m.symbol === grantForm.asset)?.unit
+                      ? `(${markets.find((m) => m.symbol === grantForm.asset).unit})`
+                      : ''}
+                  </label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="100"
+                    value={grantForm.quantity}
+                    onChange={(e) => setGrantForm((f) => ({ ...f, quantity: e.target.value }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="cute-button btn-full"
+                disabled={grantBusy || !adminKey || !grantForm.userId || !grantForm.asset}
+              >
+                {grantBusy ? 'Granting…' : 'Grant Holdings'}
+              </button>
+
+              {!adminKey && (
+                <p className="text-xs text-muted" style={{ margin: 0 }}>
+                  Enter the admin key above first.
+                </p>
+              )}
+            </form>
+
+            {grantResult && (
+              <div
+                className="text-sm"
+                style={{ color: grantResult.ok ? 'var(--success)' : 'var(--danger)' }}
+              >
+                {grantResult.message}
               </div>
             )}
           </div>

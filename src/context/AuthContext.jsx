@@ -5,6 +5,24 @@ const AuthContext = createContext(null);
 const USERS_KEY = 'tradeflow_users';
 const SESSION_KEY = 'tradeflow_session';
 
+// Generates a random 0x-prefixed 20-byte hex address, the same shape as an
+// Ethereum-style wallet address. Each user gets one, once, the first time
+// they're seen — it's stored on their user record and never regenerated
+// after that so it stays stable across logins.
+function generateAddress() {
+  const bytes = new Uint8Array(20);
+
+  if (window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  return '0x' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Seed a single demo admin account the first time the app ever runs.
 // Everyone who registers through the Register page becomes role: 'user'.
 function seedUsers() {
@@ -16,7 +34,8 @@ function seedUsers() {
       email: 'admin@tradeflow.io',
       password: 'admin123',
       displayName: 'Admin',
-      role: 'admin'
+      role: 'admin',
+      address: generateAddress()
     }
   ];
 
@@ -24,11 +43,27 @@ function seedUsers() {
   return seeded;
 }
 
+// Some user records may predate the address field (the seeded admin from
+// an old localStorage, or anyone who registered before this existed).
+// Backfills one in place and persists it if it's missing.
+function ensureAddress(userRecord, users) {
+  if (userRecord.address) return userRecord;
+
+  const withAddress = { ...userRecord, address: generateAddress() };
+  const updatedUsers = users.map((u) =>
+    u.email.toLowerCase() === userRecord.email.toLowerCase() ? withAddress : u
+  );
+  localStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
+
+  return withAddress;
+}
+
 function toSession(u) {
   return {
     email: u.email,
     displayName: u.displayName || u.email.split('@')[0],
-    role: u.role
+    role: u.role,
+    address: u.address
   };
 }
 
@@ -37,11 +72,24 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    seedUsers();
+    const users = seedUsers();
 
     const session = localStorage.getItem(SESSION_KEY);
     if (session) {
-      setUser(JSON.parse(session));
+      const parsed = JSON.parse(session);
+      // Don't just trust the stored session blob — it may predate the
+      // address field. Re-derive it from the authoritative user record
+      // so a page refresh always has an up-to-date, backfilled address.
+      const match = users.find((u) => u.email.toLowerCase() === parsed.email.toLowerCase());
+
+      if (match) {
+        const withAddress = ensureAddress(match, users);
+        const refreshed = toSession(withAddress);
+        localStorage.setItem(SESSION_KEY, JSON.stringify(refreshed));
+        setUser(refreshed);
+      } else {
+        setUser(parsed);
+      }
     }
     setLoading(false);
   }, []);
@@ -56,7 +104,10 @@ export function AuthProvider({ children }) {
       throw new Error('Invalid email or password.');
     }
 
-    const session = toSession(match);
+    // If this account predates the address field, give it one now.
+    const withAddress = ensureAddress(match, users);
+
+    const session = toSession(withAddress);
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     setUser(session);
     fetch(`http://${window.location.hostname}:8080/wallet/create`, {
@@ -86,7 +137,8 @@ export function AuthProvider({ children }) {
       email,
       password,
       displayName: email.split('@')[0],
-      role: 'user'
+      role: 'user',
+      address: generateAddress()
     };
 
     localStorage.setItem(USERS_KEY, JSON.stringify([...users, newUser]));
@@ -133,7 +185,7 @@ export function AuthProvider({ children }) {
 
     localStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
 
-    const session = { email, displayName, role: user.role };
+    const session = { email, displayName, role: user.role, address: user.address };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     setUser(session);
     return session;

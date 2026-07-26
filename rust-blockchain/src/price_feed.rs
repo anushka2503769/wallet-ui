@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -13,6 +13,11 @@ use tokio::sync::broadcast;
 // The tracked set is dynamic rather than a fixed const list so the
 // background refresh loop automatically picks up new ones.
 // ─────────────────────────────────────────────────────────────
+
+/// How many historical price points to keep per commodity, for the
+/// price-movement chart. At the default 15s refresh interval this is a
+/// little over 2 hours of history.
+const MAX_HISTORY: usize = 500;
 
 /// Everything an admin must specify to register a new tradable commodity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +51,13 @@ pub struct CommodityPrice {
     pub live: bool,
 }
 
+/// A single (timestamp, price) sample, used to chart price movement over time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricePoint {
+    pub timestamp: i64,
+    pub price: f64,
+}
+
 #[derive(Deserialize)]
 struct YahooChartResponse {
     chart: YahooChart,
@@ -69,6 +81,10 @@ struct YahooMeta {
 
 pub struct PriceFeed {
     prices: RwLock<HashMap<String, CommodityPrice>>,
+    /// Recent (timestamp, price) samples per commodity, for the price
+    /// movement chart. Only ever populated for tracked commodities —
+    /// nothing else gets charted.
+    history: RwLock<HashMap<String, VecDeque<PricePoint>>>,
     client: reqwest::Client,
     /// Subscribers (e.g. the /markets/stream SSE endpoint) get pushed
     /// a copy of every price update as soon as it lands.
@@ -90,6 +106,8 @@ impl PriceFeed {
         ];
 
         let mut initial = HashMap::new();
+        let mut history = HashMap::new();
+
         for (symbol, yahoo_symbol, contract_name, min_quantity, unit, currency, price) in seed {
             initial.insert(
                 symbol.to_string(),
@@ -105,10 +123,16 @@ impl PriceFeed {
                     live: false,
                 },
             );
+
+            history.insert(
+                symbol.to_string(),
+                VecDeque::from([PricePoint { timestamp: now, price }]),
+            );
         }
 
         Arc::new(Self {
             prices: RwLock::new(initial),
+            history: RwLock::new(history),
             client: reqwest::Client::new(),
             updates: tx,
         })
@@ -129,7 +153,7 @@ impl PriceFeed {
         prices.insert(
             cfg.symbol.clone(),
             CommodityPrice {
-                symbol: cfg.symbol,
+                symbol: cfg.symbol.clone(),
                 yahoo_symbol: cfg.yahoo_symbol,
                 contract_name: cfg.contract_name,
                 min_quantity: cfg.min_quantity,
@@ -140,6 +164,8 @@ impl PriceFeed {
                 live: false,
             },
         );
+
+        self.history.write().unwrap().insert(cfg.symbol, VecDeque::new());
 
         Ok(())
     }
@@ -182,6 +208,21 @@ impl PriceFeed {
         let mut v: Vec<_> = self.prices.read().unwrap().values().cloned().collect();
         v.sort_by(|a, b| a.symbol.cmp(&b.symbol));
         v
+    }
+
+    /// Returns up to `limit` recent price points for a commodity, oldest
+    /// first — ready to feed straight into a line chart. Empty if the
+    /// symbol isn't tracked or has no history yet.
+    pub fn history(&self, symbol: &str, limit: Option<usize>) -> Vec<PricePoint> {
+        let map = self.history.read().unwrap();
+
+        let Some(points) = map.get(symbol) else {
+            return vec![];
+        };
+
+        let take_n = limit.unwrap_or(points.len()).min(points.len());
+
+        points.iter().rev().take(take_n).rev().cloned().collect()
     }
 
     async fn fetch_one(&self, yahoo_symbol: &str) -> Result<f64, String> {
@@ -227,15 +268,24 @@ impl PriceFeed {
         for (symbol, yahoo_symbol) in targets {
             match self.fetch_one(&yahoo_symbol).await {
                 Ok(price) => {
-                    let mut prices = self.prices.write().unwrap();
+                    {
+                        let mut prices = self.prices.write().unwrap();
 
-                    if let Some(entry) = prices.get_mut(&symbol) {
-                        entry.price = price;
-                        entry.updated_at = now;
-                        entry.live = true;
+                        if let Some(entry) = prices.get_mut(&symbol) {
+                            entry.price = price;
+                            entry.updated_at = now;
+                            entry.live = true;
 
-                        // Ignore send errors — just means nobody is subscribed right now.
-                        let _ = self.updates.send(entry.clone());
+                            // Ignore send errors — just means nobody is subscribed right now.
+                            let _ = self.updates.send(entry.clone());
+                        }
+                    }
+
+                    let mut history = self.history.write().unwrap();
+                    let points = history.entry(symbol.clone()).or_insert_with(VecDeque::new);
+                    points.push_back(PricePoint { timestamp: now, price });
+                    if points.len() > MAX_HISTORY {
+                        points.pop_front();
                     }
                 }
                 Err(e) => {

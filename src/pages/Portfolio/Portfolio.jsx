@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useWallet } from '../../context/WalletContext';
+import { useAuth } from '../../context/AuthContext';
 import WalletCard from '../../components/wallet/WalletCard';
 import PortfolioChart from '../../components/charts/PortfolioChart';
 import TransactionTable from '../../components/tables/TransactionTable';
@@ -7,12 +8,16 @@ import BlockList from '../../components/blockchain/BlockList';
 
 function Portfolio() {
   const [copied, setCopied] = useState(false);
+  const { user } = useAuth();
   const { wallet: liveWallet, transactions: liveTransactions, blocks: liveBlocks } = useWallet();
 
   // 1. Live Core State Mapping
+  // The blockchain address comes from the logged-in account (generated
+  // once at registration/login — see AuthContext), not from WalletContext,
+  // since that's the durable per-user identity rather than a placeholder.
   const wallet = {
     balance: liveWallet?.balance ?? 0,
-    address: liveWallet?.address ?? '0x7A91E4B6F93D5A4E9A2F1C83D4AB6C21F5D8E9A7',
+    address: user?.address || 'Log in to see your address',
     network: liveWallet?.network ?? 'Rust Blockchain Testnet'
   };
 
@@ -85,6 +90,7 @@ function Portfolio() {
   ];
 
   const handleCopy = async () => {
+    if (!user?.address) return;
     try {
       await navigator.clipboard.writeText(wallet.address);
       setCopied(true);
@@ -111,7 +117,7 @@ function Portfolio() {
           </div>
 
           <div className="flex gap-3">
-            <button className="cute-button btn-full" onClick={handleCopy}>
+            <button className="cute-button btn-full" onClick={handleCopy} disabled={!user?.address}>
               {copied ? 'Copied!' : 'Copy Address'}
             </button>
           </div>

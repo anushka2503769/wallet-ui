@@ -115,14 +115,14 @@ private IP that works no matter what network it's actually on.
   3. Run the node on each laptop, using ITS OWN Tailscale IP in
      --advertise, and the OTHER laptop's Tailscale IP in --peers:
 
-     # Laptop A (Tailscale IP 100.101.102.1)
+     # Laptop A (Tailscale IP 100.67.197.127)
      cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
-         --advertise http://100.101.102.1:8080
+         --advertise http://100.67.197.127:8080
 
      # Laptop B (Tailscale IP 100.101.102.2)
      cargo run --bin blockchain-node -- --host 0.0.0.0 --port 8080 \
          --advertise http://100.101.102.2:8080 \
-         --peers http://100.101.102.1:8080
+         --peers http://100.67.197.127:8080
 
   4. Test connectivity first with curl before worrying about the
      frontend:
@@ -132,7 +132,7 @@ private IP that works no matter what network it's actually on.
   5. To view the frontend from the OTHER laptop, start Vite bound to
      all interfaces on whichever laptop is hosting it:
          npm run dev -- --host 0.0.0.0
-     Then browse to http://100.101.102.1:5173 (its Tailscale IP)
+     Then browse to http://100.67.197.127:5173 (its Tailscale IP)
      from the other laptop. The frontend automatically talks to the
      node on whatever host you loaded the page from — no extra
      configuration needed.

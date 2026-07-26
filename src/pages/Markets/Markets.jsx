@@ -445,7 +445,31 @@ function Markets() {
       setQueueBusy(false);
       return;
     }
+    // Prevent invalid sell orders
+    const owned = holdings.balances?.[chartAsset] ?? 0;
 
+    if (queueForm.side === 'PLACE_ASK' && quantity > owned) {
+      setQueueResult({
+        ok: false,
+        message: `You only own ${owned} ${chartAsset}.`,
+      });
+      setQueueBusy(false);
+      return;
+    }
+    const estimatedCost = price * quantity;
+
+    if (
+      queueForm.side === 'PLACE_BID' &&
+      wallet &&
+      estimatedCost > wallet.balance
+    ) {
+      setQueueResult({
+        ok: false,
+        message: `Insufficient funds. This order requires $${estimatedCost.toFixed(2)}.`,
+      });
+      setQueueBusy(false);
+      return;
+    }
     const tx = {
       id: '',
       user_id: userId,
