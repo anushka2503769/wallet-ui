@@ -1,23 +1,26 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 
 // Use whatever host the page itself was loaded from, so this works whether
 // you're on the same laptop as the node or viewing it from another machine.
 const NODE_URL = `http://${window.location.hostname}:8080`;
 
 function OpenPositions() {
-
+  const { user } = useAuth();
   const [positions, setPositions] = useState([]);
   const [markets, setMarkets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [closingId, setClosingId] = useState(null);
 
   function fetchPositions() {
-    return fetch(`${NODE_URL}/positions`)
+    if (!user) return Promise.resolve();
+    return fetch(`${NODE_URL}/positions?user_id=${encodeURIComponent(user.email)}`)
       .then(res => res.json())
       .then(setPositions);
   }
 
   useEffect(() => {
+    if (!user) return;
     setLoading(true);
     Promise.all([
       fetchPositions(),
@@ -42,7 +45,7 @@ function OpenPositions() {
     };
 
     return () => source.close();
-  }, []);
+  }, [user]);
 
   const closePosition = async (positionId) => {
     setClosingId(positionId);
@@ -57,6 +60,7 @@ function OpenPositions() {
           },
           body: JSON.stringify({
             id: '',
+            user_id: user?.email || null,
             contract_code: positionId,
             contract_action: 'CLOSE_POSITION'
           })

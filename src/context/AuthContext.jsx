@@ -59,6 +59,15 @@ export function AuthProvider({ children }) {
     const session = toSession(match);
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     setUser(session);
+    fetch(`http://${window.location.hostname}:8080/wallet/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: session.email,
+      }),
+    }).catch(console.error);
     return session;
   };
 
@@ -85,7 +94,17 @@ export function AuthProvider({ children }) {
     const session = toSession(newUser);
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     setUser(session);
-    return session;
+    fetch(`http://${window.location.hostname}:8080/wallet/create`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: session.email,
+    }),
+  }).catch(console.error);
+
+  return session;
   };
 
   const logout = () => {

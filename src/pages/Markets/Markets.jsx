@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LineChart, Line, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TrendingUp, TrendingDown, Radio, Cpu } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 // Use whatever host the page itself was loaded from (localhost, a LAN IP,
 // or a Tailscale/VPN address) so this works whether you're on the same
@@ -32,6 +33,7 @@ function Markets() {
   const [wallet, setWallet] = useState(null);
   const [connected, setConnected] = useState(false);
   const [mempool, setMempool] = useState([]);
+  const { user } = useAuth();
 
   // Per-symbol flash direction, cleared a moment after each update.
   const [flash, setFlash] = useState({});
@@ -124,11 +126,12 @@ function Markets() {
 
   // Wallet
   useEffect(() => {
-    fetch(`${NODE_URL}/wallet`)
+    if (!user) return;
+    fetch(`${NODE_URL}/wallet?user_id=${encodeURIComponent(user.email)}`)
       .then((res) => res.json())
       .then(setWallet)
       .catch(console.error);
-  }, []);
+  }, [user]);
 
   const selectedMarket = markets.find((m) => m.symbol === tradeForm.asset);
   const selectedHistory = selectedMarket ? (priceHistory.current[selectedMarket.symbol] ?? []) : [];
@@ -203,6 +206,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_FUTURES',
 
@@ -218,6 +222,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_PERPETUAL',
 
@@ -233,6 +238,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'BUY_OPTION',
 
@@ -247,6 +253,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: tradeForm.positionId,
           contract_action: 'CLOSE_POSITION',
         };

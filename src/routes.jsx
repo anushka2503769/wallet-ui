@@ -1,6 +1,5 @@
 import Portfolio from './pages/Portfolio/Portfolio';
 import SendReceive from './pages/SendReceive/SendReceive'
-import Staking from './pages/Staking/Staking';
 import Harness from './pages/Harness/Harness';
 import Settings from './pages/Settings/Settings';
 import Markets from './pages/Markets/Markets';
@@ -43,10 +42,6 @@ const routes = [
   {
     path: '/sendreceive',
     element: <ProtectedRoute><SendReceive /></ProtectedRoute>
-  },
-  {
-    path: '/staking',
-    element: <ProtectedRoute><Staking /></ProtectedRoute>
   },
   {
     path: '/harness',
