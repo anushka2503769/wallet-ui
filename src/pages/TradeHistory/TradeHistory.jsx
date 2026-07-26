@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 
 function TradeHistory() {
   const [trades, setTrades] = useState([]);
+  const { user } = useAuth();
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8080/trade-history')
+    if (!user) return;
+    fetch('http://127.0.0.1:8080/trade-history?user_id=' + encodeURIComponent(user.email))
       .then(res => res.json())
       .then(data => setTrades(data));
-  }, []);
+  }, [user]);
 
   return (
     <div className="page-container">

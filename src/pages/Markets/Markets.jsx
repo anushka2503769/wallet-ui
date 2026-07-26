@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import { useAuth } from '../../context/AuthContext';
 
 // Use whatever host the page itself was loaded from (localhost, a LAN IP,
 // or a Tailscale/VPN address) so this works whether you're on the same
@@ -39,6 +40,7 @@ function Markets() {
   const [markets, setMarkets] = useState([]);
   const [wallet, setWallet] = useState(null);
   const [connected, setConnected] = useState(false);
+  const { user } = useAuth();
 
   // Per-symbol flash direction, cleared a moment after each update.
   const [flash, setFlash] = useState({});
@@ -140,12 +142,13 @@ function Markets() {
 
   // Wallet
   function refreshWallet() {
-    fetch(`${NODE_URL}/wallet`)
+    if (!user) return;
+    fetch(`${NODE_URL}/wallet?user_id=${encodeURIComponent(user.email)}`)
       .then((res) => res.json())
       .then(setWallet)
       .catch(console.error);
   }
-  useEffect(refreshWallet, []);
+  useEffect(refreshWallet, [user]);
 
   // Fees
   function refreshFees() {
@@ -232,6 +235,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_FUTURES',
 
@@ -247,6 +251,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'OPEN_PERPETUAL',
 
@@ -262,6 +267,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: 'CommodityTrading',
           contract_action: 'BUY_OPTION',
 
@@ -276,6 +282,7 @@ function Markets() {
 
         tx = {
           id: '',
+          user_id: user?.email || null,
           contract_code: tradeForm.positionId,
           contract_action: 'CLOSE_POSITION',
         };
@@ -350,6 +357,7 @@ function Markets() {
 
     const tx = {
       id: '',
+      user_id: user?.email || null,
       contract_code: 'CommodityTrading',
       contract_action: queueForm.side, // PLACE_BID or PLACE_ASK
       trade: {
@@ -384,6 +392,7 @@ function Markets() {
 
     const tx = {
       id: '',
+      user_id: user?.email || null,
       contract_code: order.id,
       contract_action: 'CANCEL_ORDER',
       trade: { asset: chartAsset, quantity: 0, direction: '' },

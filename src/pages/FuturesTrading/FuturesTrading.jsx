@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 
 function FuturesTrading() {
+  const { user } = useAuth();
 
   const [asset, setAsset] = useState('xGOLD');
   const [quantity, setQuantity] = useState('');
@@ -12,6 +14,7 @@ function FuturesTrading() {
 
     const tx = {
       id: '',
+      user_id: user?.email || null,
       contract_code: 'CommodityTrading',
       contract_action: 'OPEN_FUTURES',
 

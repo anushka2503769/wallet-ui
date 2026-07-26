@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { ArrowUpRight, ArrowDownLeft, CheckCircle2, Loader2 } from 'lucide-react';
 import { walletService } from '../../services/api/walletService';
+import { useAuth } from '../../context/AuthContext';
 
 function SendReceive() {
+  const { user } = useAuth();
   const [formData, setFormData] = useState({
+    user_id: user?.email || null,
     address: '',
     amount: ''
   });

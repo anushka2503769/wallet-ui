@@ -304,6 +304,7 @@ impl BlockchainEngine {
         // (see wallet_key/holdings_key), so there's nothing to re-seed here
         // — just make sure the shared fee treasury starts clean too.
         self.put_json_state("treasury", &Treasury::default());
+        self.put_json_state("wallet", &Wallet { balance: 100000.00, user_id: None });
     }
 
 }
@@ -1615,6 +1616,33 @@ async fn get_wallet(
     HttpResponse::Ok().json(wallet)
 }
 
+#[derive(Deserialize)]
+struct CreateWalletRequest {
+    user_id: String,
+}
+
+// Creates a new wallet for a user if one doesn't already exist.
+#[post("/wallet/create")]
+async fn create_wallet(
+    data: web::Data<AppState>,
+    req: web::Json<CreateWalletRequest>,
+) -> impl Responder {
+
+    let key = wallet_key(&req.user_id);
+
+    if data.engine.get_json_state::<Wallet>(&key).is_none() {
+        data.engine.put_json_state(
+            &key,
+            &Wallet {
+                user_id: Some(req.user_id.clone()),
+                balance: 100000.0,
+            },
+        );
+    }
+
+    HttpResponse::Ok().finish()
+}
+
 // ===================== TRADING QUEUE / FEES ENDPOINTS =====================
 
 // Returns the current resting bids and asks for a commodity — the trading
@@ -1670,6 +1698,7 @@ async fn get_holdings(
     HttpResponse::Ok().json(holdings)
 }
 
+
 #[derive(Deserialize)]
 struct HistoryQuery {
     limit: Option<usize>,
@@ -1688,6 +1717,7 @@ async fn markets_history(
     HttpResponse::Ok().json(data.price_feed.history(&symbol, query.limit))
 }
 
+
 // The current trading fee rate and how much has been collected so far.
 #[get("/fees")]
 async fn get_fees(data: web::Data<AppState>) -> impl Responder {
@@ -1701,33 +1731,6 @@ async fn get_fees(data: web::Data<AppState>) -> impl Responder {
         "fee_percent": data.fee_bps as f64 / 100.0,
         "treasury_collected": treasury.collected,
     }))
-}
-
-#[derive(Deserialize)]
-struct CreateWalletRequest {
-    user_id: String,
-}
-
-// Creates a new wallet for a user if one doesn't already exist.
-#[post("/wallet/create")]
-async fn create_wallet(
-    data: web::Data<AppState>,
-    req: web::Json<CreateWalletRequest>,
-) -> impl Responder {
-
-    let key = wallet_key(&req.user_id);
-
-    if data.engine.get_json_state::<Wallet>(&key).is_none() {
-        data.engine.put_json_state(
-            &key,
-            &Wallet {
-                user_id: Some(req.user_id.clone()),
-                balance: 100000.0,
-            },
-        );
-    }
-
-    HttpResponse::Ok().finish()
 }
 
 // ===================== ADMIN ENDPOINTS =====================

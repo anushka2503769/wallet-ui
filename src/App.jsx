@@ -44,13 +44,6 @@ function AppLayout() {
             Send & Receive
           </NavLink>
 
-          <NavLink
-            to="/staking"
-            className="sidebar-link"
-          >
-            Staking
-          </NavLink>
-
           {/* Harness is admin-only — regular users never see this link */}
           {isAdmin && (
             <NavLink

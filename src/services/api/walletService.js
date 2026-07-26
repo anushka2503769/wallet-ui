@@ -61,8 +61,18 @@ async function queryTable(tableName) {
 
 export const walletService = {
   async getWallet() {
+    const session = JSON.parse(localStorage.getItem("tradeflow_session") || "null");
+
+    if (!session) {
+      return {
+        balance: 0,
+        network: API_CONFIG.NETWORK,
+        address: "Rust blockchain wallet"
+      };
+    }
+
     const wallet = await safeCall(
-      () => httpGet(`${BASE_URL}/wallet`),
+      () => httpGet(`${BASE_URL}/wallet?user_id=${encodeURIComponent(session.email)}`),
       { balance: 0 }
     );
 
@@ -134,6 +144,7 @@ export const walletService = {
   async sendTransaction(payload) {
     const submitted = await httpPost(`${BASE_URL}/tx/submit`, {
       id: '',
+      user_id: payload.user_id || null,
       contract_code: payload.address || 'transfer',
       contract_action: `send:${payload.amount ?? 0}`,
       trade: {
@@ -157,6 +168,7 @@ export const walletService = {
   async stakeTokens(amount) {
     const submitted = await httpPost(`${BASE_URL}/tx/submit`, {
       id: '',
+      user_id: API_CONFIG.USER_ID || null,
       contract_code: 'stake',
       contract_action: `stake:${amount}`,
       trade: {

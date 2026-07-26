@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 
 // Use whatever host the page itself was loaded from, so this works whether
 // you're on the same laptop as the node or viewing it from another machine.
 const NODE_URL = `http://${window.location.hostname}:8080`;
 
 function OptionsTrading() {
+  const { user } = useAuth();
 
   const [asset, setAsset] = useState('xGOLD');
   const [quantity, setQuantity] = useState('');
@@ -56,6 +58,7 @@ function OptionsTrading() {
 
     const tx = {
       id:'',
+      user_id: user?.email || null,
       contract_code:'CommodityTrading',
       contract_action:'BUY_OPTION',
 
