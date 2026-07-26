@@ -14,7 +14,6 @@ use actix_web::{get, post, web, App, HttpRequest, HttpResponse, HttpServer, Resp
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use rocksdb::{DB, Options};
@@ -27,7 +26,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::catalog::Session;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{Expr, TableType};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -43,6 +41,7 @@ use datafusion::prelude::*;
 
 use uuid::Uuid;
 use actix_cors::Cors;
+use std::collections::HashMap;
 
 // ===================== DATA =====================
 
@@ -61,6 +60,8 @@ pub struct TradeData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub id: String,
+    #[serde(default)]
+    pub user_id: Option<String>,
     pub contract_code: Option<String>,
     pub contract_action: Option<String>,
     #[serde(default)]
@@ -71,6 +72,7 @@ impl Transaction {
     pub fn new(code: Option<String>, action: Option<String>) -> Self {
         let mut tx = Transaction {
             id: Uuid::new_v4().to_string(),
+            user_id: None,
             contract_code: code,
             contract_action: action,
             trade: None,
@@ -104,6 +106,7 @@ pub struct Block {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub id: String,
+    pub user_id: Option<String>,
     pub asset: String,
     pub position_type: String,
     pub direction: String,
@@ -117,6 +120,7 @@ pub struct Position {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wallet {
+    pub user_id: Option<String>,
     pub balance: f64,
 }
 
@@ -175,16 +179,6 @@ impl BlockchainEngine {
             };
 
             engine.write_block(&genesis);
-        }
-
-        // Initialize wallet if it doesn't exist
-        if engine.get_json_state::<Wallet>("wallet").is_none() {
-            engine.put_json_state(
-                "wallet",
-                &Wallet {
-                    balance: 100000.00,
-                },
-            );
         }
 
         engine
@@ -277,8 +271,9 @@ impl BlockchainEngine {
         serde_json::from_slice(&value).ok()
     }
 
-    /// Wipes all blocks and derived contract state (wallet, positions) so a
-    /// better chain received from a peer can be replayed from genesis.
+    /// Wipes all blocks and derived contract state (wallets, holdings,
+    /// positions, order books, treasury) so a better chain received from a
+    /// peer can be replayed from genesis.
     /// Used only during P2P fork resolution — see `adopt_chain_if_better`.
     pub fn reset_chain_state(&self) {
         let iter = self.db.iterator(rocksdb::IteratorMode::Start);
@@ -291,9 +286,9 @@ impl BlockchainEngine {
                 || key.starts_with(b"state:position_")
                 || key.starts_with(b"state:orderbook_")
                 || key.starts_with(b"state:fills_")
+                || key.starts_with(b"state:wallet_")
+                || key.starts_with(b"state:holdings_")
                 || key.as_ref() == b"latest_index".as_slice()
-                || key.as_ref() == b"state:wallet".as_slice()
-                || key.as_ref() == b"state:holdings".as_slice()
                 || key.as_ref() == b"state:treasury".as_slice()
             {
                 keys_to_delete.push(key.to_vec());
@@ -304,9 +299,10 @@ impl BlockchainEngine {
             let _ = self.db.delete(key);
         }
 
-        // Reset to the same starting balance new nodes get, before replaying.
-        self.put_json_state("wallet", &Wallet { balance: 100000.00 });
-        self.put_json_state("holdings", &Holdings::default());
+        // Per-user wallets/holdings are lazily recreated with the default
+        // starting balance the first time each user is referenced again
+        // (see wallet_key/holdings_key), so there's nothing to re-seed here
+        // — just make sure the shared fee treasury starts clean too.
         self.put_json_state("treasury", &Treasury::default());
     }
 
@@ -494,6 +490,7 @@ impl TransactionsTableProvider {
         let schema = Arc::new(Schema::new(vec![
             Field::new("block_index", DataType::UInt64, false),
             Field::new("tx_id", DataType::Utf8, false),
+            Field::new("user_id", DataType::Utf8, true),
             Field::new("contract_code", DataType::Utf8, true),
             Field::new("contract_action", DataType::Utf8, true),
             Field::new("asset", DataType::Utf8, true),
@@ -573,6 +570,7 @@ impl ExecutionPlan for TransactionsExecutionPlan {
 
         let mut block_indices = vec![];
         let mut tx_ids = vec![];
+        let mut user_ids = vec![];
         let mut codes = vec![];
         let mut actions = vec![];
 
@@ -586,6 +584,7 @@ impl ExecutionPlan for TransactionsExecutionPlan {
 
                 block_indices.push(block.index);
                 tx_ids.push(tx.id.clone());
+                user_ids.push(tx.user_id.clone());
                 codes.push(tx.contract_code.clone());
                 actions.push(tx.contract_action.clone());
 
@@ -611,6 +610,7 @@ impl ExecutionPlan for TransactionsExecutionPlan {
             vec![
                 Arc::new(UInt64Array::from(block_indices)),
                 Arc::new(StringArray::from(tx_ids)),
+                Arc::new(StringArray::from(user_ids)),
                 Arc::new(StringArray::from(codes)),
                 Arc::new(StringArray::from(actions)),
                 Arc::new(StringArray::from(assets)),
@@ -670,6 +670,13 @@ impl QueryEngine {
 }
 
 // ===================== CONTRACT EXECUTION =====================
+fn wallet_key(user_id: &str) -> String {
+    format!("wallet_{}", user_id)
+}
+
+fn holdings_key(user_id: &str) -> String {
+    format!("holdings_{}", user_id)
+}
 
 /// Deducts a trading fee (in basis points of the notional value) from an
 /// already-loaded wallet and credits it to an already-loaded treasury.
@@ -711,9 +718,15 @@ fn execute_contract(
                     (trade.quantity * entry_price)
                     / leverage;
 
+                let user_id = tx.user_id.as_ref().ok_or("User not logged in")?;
+                let key = wallet_key(user_id);
+
                 let mut user_wallet = engine
-                    .get_json_state::<Wallet>("wallet")
-                    .unwrap();
+                    .get_json_state::<Wallet>(&key)
+                    .unwrap_or(Wallet {
+                        user_id: Some(user_id.to_string()),
+                        balance: 100000.0,
+                    });
 
                 let mut treasury = engine
                     .get_json_state::<Treasury>("treasury")
@@ -730,7 +743,7 @@ fn execute_contract(
                 user_wallet.balance -= margin;
 
                 engine.put_json_state(
-                    "wallet",
+                    &key,
                     &user_wallet
                 );
 
@@ -741,6 +754,7 @@ fn execute_contract(
 
                 let position = Position {
                     id: tx.id.clone(),
+                    user_id: tx.user_id.clone(),
                     asset: trade.asset.clone(),
                     position_type:
                         "FUTURES".to_string(),
@@ -787,9 +801,15 @@ fn execute_contract(
                     (trade.quantity * entry_price)
                     / leverage;
 
+                let user_id = tx.user_id.as_ref().ok_or("User not logged in")?;
+                let key = wallet_key(user_id);
+
                 let mut user_wallet = engine
-                    .get_json_state::<Wallet>("wallet")
-                    .unwrap();
+                    .get_json_state::<Wallet>(&key)
+                    .unwrap_or(Wallet {
+                        user_id: Some(user_id.to_string()),
+                        balance: 100000.0,
+                    });
 
                 let mut treasury = engine
                     .get_json_state::<Treasury>("treasury")
@@ -806,7 +826,7 @@ fn execute_contract(
                 user_wallet.balance -= margin;
 
                 engine.put_json_state(
-                    "wallet",
+                    &key,
                     &user_wallet
                 );
 
@@ -817,6 +837,7 @@ fn execute_contract(
 
                 let position = Position {
                     id: tx.id.clone(),
+                    user_id: tx.user_id.clone(),
                     asset: trade.asset.clone(),
                     position_type:
                         "PERPETUAL".to_string(),
@@ -859,9 +880,15 @@ fn execute_contract(
                 let margin =
                     entry_price * trade.quantity;
 
+                let user_id = tx.user_id.as_ref().ok_or("User not logged in")?;
+                let key = wallet_key(user_id);
+
                 let mut user_wallet = engine
-                    .get_json_state::<Wallet>("wallet")
-                    .unwrap();
+                    .get_json_state::<Wallet>(&key)
+                    .unwrap_or(Wallet {
+                        user_id: Some(user_id.to_string()),
+                        balance: 100000.0,
+                    });
 
                 let mut treasury = engine
                     .get_json_state::<Treasury>("treasury")
@@ -876,7 +903,7 @@ fn execute_contract(
                 user_wallet.balance -= margin;
 
                 engine.put_json_state(
-                    "wallet",
+                    &key,
                     &user_wallet
                 );
 
@@ -887,6 +914,7 @@ fn execute_contract(
 
                 let position = Position {
                     id: tx.id.clone(),
+                    user_id: tx.user_id.clone(),
                     asset: trade.asset.clone(),
                     position_type:
                         "OPTION".to_string(),
@@ -968,9 +996,18 @@ fn execute_contract(
                         // Update wallet
                         // ==========================
 
+                        let owner = position.user_id
+                            .as_ref()
+                            .ok_or("User not logged in")?;
+
+                        let key = wallet_key(owner);
+
                         let mut user_wallet = engine
-                            .get_json_state::<Wallet>("wallet")
-                            .unwrap();
+                            .get_json_state::<Wallet>(&key)
+                            .unwrap_or(Wallet {
+                                user_id: Some(owner.to_string()),
+                                balance: 100000.0,
+                            });
 
                         let mut treasury = engine
                             .get_json_state::<Treasury>("treasury")
@@ -984,7 +1021,7 @@ fn execute_contract(
                             + pnl;
 
                         engine.put_json_state(
-                            "wallet",
+                            &key,
                             &user_wallet
                         );
 
@@ -1008,6 +1045,8 @@ fn execute_contract(
         // commodity, matched price/time-priority against each other. See
         // orderbook.rs for the matching engine itself.
         Some(action @ ("PLACE_BID" | "PLACE_ASK")) => {
+
+            let user_id = tx.user_id.as_ref().ok_or("User not logged in")?;
 
             let Some(trade) = &tx.trade else {
                 return Err("PLACE_BID/PLACE_ASK requires a trade payload");
@@ -1038,6 +1077,7 @@ fn execute_contract(
                 id: tx.id.clone(),
                 asset: trade.asset.clone(),
                 side,
+                user_id: user_id.clone(),
                 price,
                 quantity: trade.quantity,
                 remaining: trade.quantity,
@@ -1047,25 +1087,29 @@ fn execute_contract(
 
             // Reserve whatever this order commits, up front — cash for a
             // bid, the commodity itself for an ask — so it can't be spent
-            // twice across multiple simultaneously open orders.
+            // twice across multiple simultaneously open orders from the
+            // same account.
             match side {
                 OrderSide::Bid => {
                     let reserve = price * trade.quantity;
+                    let key = wallet_key(user_id);
 
                     let mut user_wallet = engine
-                        .get_json_state::<Wallet>("wallet")
-                        .unwrap();
+                        .get_json_state::<Wallet>(&key)
+                        .unwrap_or(Wallet { user_id: Some(user_id.clone()), balance: 100000.0 });
 
                     if user_wallet.balance < reserve {
                         return Err("Insufficient balance to place bid");
                     }
 
                     user_wallet.balance -= reserve;
-                    engine.put_json_state("wallet", &user_wallet);
+                    engine.put_json_state(&key, &user_wallet);
                 }
                 OrderSide::Ask => {
+                    let key = holdings_key(user_id);
+
                     let mut holdings = engine
-                        .get_json_state::<Holdings>("holdings")
+                        .get_json_state::<Holdings>(&key)
                         .unwrap_or_default();
 
                     let have = holdings.balances.get(&trade.asset).copied().unwrap_or(0.0);
@@ -1075,37 +1119,54 @@ fn execute_contract(
                     }
 
                     *holdings.balances.entry(trade.asset.clone()).or_insert(0.0) -= trade.quantity;
-                    engine.put_json_state("holdings", &holdings);
+                    engine.put_json_state(&key, &holdings);
                 }
             }
 
             let fills = book.submit(order);
 
-            if !fills.is_empty() {
-                let mut user_wallet = engine.get_json_state::<Wallet>("wallet").unwrap();
-                let mut holdings = engine.get_json_state::<Holdings>("holdings").unwrap_or_default();
+            // Each fill can involve two DIFFERENT accounts (whoever placed
+            // the bid, whoever placed the ask) — so unlike the other trade
+            // actions, we can't just load one wallet up front. Settle each
+            // side of each fill against its own owner's wallet/holdings,
+            // and charge a fee on both legs (maker and taker both pay).
+            for fill in &fills {
+                let bid_wallet_key = wallet_key(&fill.bid_user_id);
+                let bid_holdings_key = holdings_key(&fill.bid_user_id);
+
+                let mut bid_wallet = engine
+                    .get_json_state::<Wallet>(&bid_wallet_key)
+                    .unwrap_or(Wallet { user_id: Some(fill.bid_user_id.clone()), balance: 100000.0 });
+                let mut bid_holdings = engine
+                    .get_json_state::<Holdings>(&bid_holdings_key)
+                    .unwrap_or_default();
                 let mut treasury = engine.get_json_state::<Treasury>("treasury").unwrap_or_default();
 
-                for fill in &fills {
-                    // Buyer leg: receives the commodity, and is refunded any
-                    // favorable gap between their bid's limit price and the
-                    // price it actually filled at (zero if their own order
-                    // was the one resting/setting the price).
-                    *holdings.balances.entry(fill.asset.clone()).or_insert(0.0) += fill.quantity;
-                    let refund = (fill.bid_price - fill.price) * fill.quantity;
+                // Buyer leg: receives the commodity, and is refunded any
+                // favorable gap between their bid's limit price and the
+                // price it actually filled at (zero if their own order was
+                // the one resting/setting the price).
+                *bid_holdings.balances.entry(fill.asset.clone()).or_insert(0.0) += fill.quantity;
+                let refund = (fill.bid_price - fill.price) * fill.quantity;
+                let notional = fill.price * fill.quantity;
+                apply_fee(&mut bid_wallet, &mut treasury, notional, fee_bps);
+                bid_wallet.balance += refund;
 
-                    // Seller leg: receives proceeds at the fill price
-                    // (holdings were already reserved when their ask was placed).
-                    let proceeds = fill.price * fill.quantity;
+                engine.put_json_state(&bid_wallet_key, &bid_wallet);
+                engine.put_json_state(&bid_holdings_key, &bid_holdings);
 
-                    // apply_fee() deducts the fee from user_wallet.balance directly;
-                    // on top of that we credit the refund and proceeds.
-                    apply_fee(&mut user_wallet, &mut treasury, proceeds, fee_bps);
-                    user_wallet.balance += refund + proceeds;
-                }
+                // Seller leg: receives proceeds at the fill price
+                // (holdings were already reserved when their ask was placed).
+                let ask_wallet_key = wallet_key(&fill.ask_user_id);
 
-                engine.put_json_state("wallet", &user_wallet);
-                engine.put_json_state("holdings", &holdings);
+                let mut ask_wallet = engine
+                    .get_json_state::<Wallet>(&ask_wallet_key)
+                    .unwrap_or(Wallet { user_id: Some(fill.ask_user_id.clone()), balance: 100000.0 });
+
+                apply_fee(&mut ask_wallet, &mut treasury, notional, fee_bps);
+                ask_wallet.balance += notional;
+
+                engine.put_json_state(&ask_wallet_key, &ask_wallet);
                 engine.put_json_state("treasury", &treasury);
             }
 
@@ -1129,6 +1190,8 @@ fn execute_contract(
 
         Some("CANCEL_ORDER") => {
 
+            let user_id = tx.user_id.as_ref().ok_or("User not logged in")?;
+
             let (Some(order_id), Some(trade)) = (&tx.contract_code, &tx.trade) else {
                 return Err("CANCEL_ORDER requires contract_code (order id) and trade.asset");
             };
@@ -1137,16 +1200,34 @@ fn execute_contract(
                 .get_json_state::<OrderBook>(&format!("orderbook_{}", trade.asset))
                 .unwrap_or_default();
 
+            // Only the account that placed an order can cancel it.
+            let owns_order = book
+                .bids
+                .iter()
+                .chain(book.asks.iter())
+                .find(|o| &o.id == order_id)
+                .map(|o| &o.user_id == user_id);
+
+            match owns_order {
+                None => return Err("Order not found"),
+                Some(false) => return Err("You do not own this order"),
+                Some(true) => {}
+            }
+
             match book.cancel(order_id) {
                 Some(order) if order.side == OrderSide::Bid => {
-                    let mut user_wallet = engine.get_json_state::<Wallet>("wallet").unwrap();
+                    let key = wallet_key(user_id);
+                    let mut user_wallet = engine
+                        .get_json_state::<Wallet>(&key)
+                        .unwrap_or(Wallet { user_id: Some(user_id.clone()), balance: 100000.0 });
                     user_wallet.balance += order.remaining * order.price;
-                    engine.put_json_state("wallet", &user_wallet);
+                    engine.put_json_state(&key, &user_wallet);
                 }
                 Some(order) => {
-                    let mut holdings = engine.get_json_state::<Holdings>("holdings").unwrap_or_default();
-                    *holdings.balances.entry(trade.asset.clone()).or_insert(0.0) += order.remaining;
-                    engine.put_json_state("holdings", &holdings);
+                    let key = holdings_key(user_id);
+                    let mut holdings = engine.get_json_state::<Holdings>(&key).unwrap_or_default();
+                    *holdings.balances.entry(order.asset.clone()).or_insert(0.0) += order.remaining;
+                    engine.put_json_state(&key, &holdings);
                 }
                 None => {
                     return Err("Order not found");
@@ -1282,6 +1363,12 @@ async fn submit_tx(
     HttpResponse::Ok().json(tx)
 }
 
+#[get("/mempool")]
+async fn mempool(data: web::Data<AppState>) -> impl Responder {
+    let pool = data.engine.mempool.lock().unwrap().clone();
+    HttpResponse::Ok().json(pool)
+}
+
 #[post("/engine/mine")]
 async fn mine_block(data: web::Data<AppState>) -> impl Responder {
     let mut pool = data.engine.mempool.lock().unwrap();
@@ -1374,9 +1461,12 @@ async fn consensus_status(data: web::Data<AppState>) -> impl Responder {
 #[get("/positions")]
 async fn positions(
     data: web::Data<AppState>,
+    query: web::Query<HashMap<String, String>>
 ) -> impl Responder {
 
     let mut positions = vec![];
+
+    let user_id = query.get("user_id");
 
     let iter = data.engine.db.iterator(
         rocksdb::IteratorMode::Start
@@ -1393,9 +1483,18 @@ async fn positions(
         if let Ok(position) =
             serde_json::from_slice::<Position>(&value)
         {
-            if !position.closed {
-                positions.push(position);
+            
+            if position.closed {
+                continue;
             }
+
+            if let Some(user_id) = query.get("user_id") {
+                if position.user_id.as_ref() != Some(user_id) {
+                    continue;
+                }
+            }
+
+            positions.push(position);
         }
             }
 
@@ -1442,15 +1541,26 @@ fn get_market_price(price_feed: &PriceFeed, asset: &str) -> f64 {
 #[get("/trade-history")]
 async fn trade_history(
     data: web::Data<AppState>,
+    query: web::Query<HashMap<String, String>>
 ) -> impl Responder {
 
     let mut trades = vec![];
+
+    let user_id = query.get("user_id");
 
     let blocks = data.engine.load_blocks();
 
     for block in blocks {
 
         for tx in block.transactions {
+
+            // Only return this user's trades
+            if let Some(uid) = user_id {
+                if tx.user_id.as_ref() != Some(uid) {
+                    continue;
+                }
+            }
+
             let closed = if let Some(position) =
                     data.engine.get_json_state::<Position>(
                         &format!("position_{}", tx.id)
@@ -1486,16 +1596,21 @@ async fn trade_history(
 #[get("/wallet")]
 async fn get_wallet(
     data: web::Data<AppState>,
+    query: web::Query<HashMap<String, String>>
 ) -> impl Responder {
 
-    let wallet = data
-        .engine
-        .get_json_state::<Wallet>("wallet")
-        .unwrap_or(
-            Wallet {
-                balance: 100000.0,
-            }
-        );
+    let Some(user_id) = query.get("user_id") else {
+        return HttpResponse::BadRequest().body("User not logged in");
+    };
+
+    let key = wallet_key(user_id);
+
+    let wallet = match data.engine.get_json_state::<Wallet>(&key) {
+        Some(wallet) => wallet,
+        None => {
+            return HttpResponse::NotFound().body("Wallet not found");
+        }
+    };
 
     HttpResponse::Ok().json(wallet)
 }
@@ -1536,13 +1651,20 @@ async fn get_orderbook_fills(
     HttpResponse::Ok().json(fills)
 }
 
-// How much of each commodity the trader currently holds — built up by
-// filled bids and drawn down by filled asks in the trading queue.
+// How much of each commodity a user currently holds — built up by filled
+// bids and drawn down by filled asks in the trading queue.
 #[get("/holdings")]
-async fn get_holdings(data: web::Data<AppState>) -> impl Responder {
+async fn get_holdings(
+    data: web::Data<AppState>,
+    query: web::Query<HashMap<String, String>>,
+) -> impl Responder {
+    let Some(user_id) = query.get("user_id") else {
+        return HttpResponse::BadRequest().body("User not logged in");
+    };
+
     let holdings = data
         .engine
-        .get_json_state::<Holdings>("holdings")
+        .get_json_state::<Holdings>(&holdings_key(user_id))
         .unwrap_or_default();
 
     HttpResponse::Ok().json(holdings)
@@ -1579,6 +1701,33 @@ async fn get_fees(data: web::Data<AppState>) -> impl Responder {
         "fee_percent": data.fee_bps as f64 / 100.0,
         "treasury_collected": treasury.collected,
     }))
+}
+
+#[derive(Deserialize)]
+struct CreateWalletRequest {
+    user_id: String,
+}
+
+// Creates a new wallet for a user if one doesn't already exist.
+#[post("/wallet/create")]
+async fn create_wallet(
+    data: web::Data<AppState>,
+    req: web::Json<CreateWalletRequest>,
+) -> impl Responder {
+
+    let key = wallet_key(&req.user_id);
+
+    if data.engine.get_json_state::<Wallet>(&key).is_none() {
+        data.engine.put_json_state(
+            &key,
+            &Wallet {
+                user_id: Some(req.user_id.clone()),
+                balance: 100000.0,
+            },
+        );
+    }
+
+    HttpResponse::Ok().finish()
 }
 
 // ===================== ADMIN ENDPOINTS =====================
@@ -2011,6 +2160,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_state.clone())
             .service(submit_tx)
             .service(mine_block)
+            .service(mempool)
             .service(query_state)
             .service(sql_query)
             .service(consensus_status)
@@ -2019,6 +2169,7 @@ async fn main() -> std::io::Result<()> {
             .service(markets_stream)
             .service(trade_history)
             .service(get_wallet)
+            .service(create_wallet)
             .service(p2p_connect)
             .service(p2p_register)
             .service(p2p_peers)
