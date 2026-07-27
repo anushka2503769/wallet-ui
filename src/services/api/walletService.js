@@ -52,8 +52,12 @@ async function safeCall(operation, fallback) {
 }
 
 async function queryTable(tableName) {
+  const session = JSON.parse(localStorage.getItem("tradeflow_session") || "null");
+  if (!session) {
+    return [];
+  }
   const rows = await httpPost(`${BASE_URL}/sql`, {
-    sql: `SELECT * FROM ${tableName}`
+    sql: `SELECT * FROM ${tableName} WHERE user_id = '${session.email}'`
   });
 
   return normalizeRows(rows);
@@ -112,12 +116,28 @@ export const walletService = {
   },
 
   async getBlocks() {
-    const rows = await safeCall(
-      () => queryTable('blocks'),
+    const txRows = await safeCall(
+      () => queryTable("transactions"),
+      []
+    );
+
+    const blockRows = await safeCall(
+      () => httpPost(`${BASE_URL}/sql`, {
+        sql: "SELECT * FROM blocks"
+      }),
       mockBlocks
     );
 
-    const mapped = mapBlocks(rows);
+    const blockIds = new Set(
+      txRows.map(tx => tx.block_index)
+    );
+
+    const filtered = blockRows.filter(block =>
+      blockIds.has(block.index)
+    );
+
+    const mapped = mapBlocks(filtered);
+
     return mapped.length > 0 ? mapped : mapBlocks(mockBlocks);
   },
 

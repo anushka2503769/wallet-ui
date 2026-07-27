@@ -19,7 +19,7 @@ function TransactionTable({ transactions }) {
             <tr key={tx.hash}>
               <td>{tx.hash}</td>
               <td>{tx.type}</td>
-              <td>${tx.amount}</td>
+              <td>{tx.amount}</td>
               <td>{tx.status}</td>
               <td>{tx.block}</td>
             </tr>

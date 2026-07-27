@@ -20,7 +20,7 @@ use rocksdb::{DB, Options};
 use std::any::Any;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{StringArray, UInt64Array, Int64Array, Float64Array};
+use datafusion::arrow::array::{Array, StringArray, UInt64Array, Int64Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
@@ -427,42 +427,70 @@ impl ExecutionPlan for BlocksExecutionPlan {
 }
 
 fn batches_to_json(batches: &[RecordBatch]) -> Value {
-    let mut rows = vec![];
+    let mut rows = Vec::new();
 
     for batch in batches {
         let schema = batch.schema();
         let cols = batch.columns();
-        let num_rows = batch.num_rows();
 
-        for row in 0..num_rows {
+        for row in 0..batch.num_rows() {
             let mut obj = serde_json::Map::new();
 
             for (i, field) in schema.fields().iter().enumerate() {
                 let array = cols[i].as_ref();
 
                 let value = match array.data_type() {
-                    datafusion::arrow::datatypes::DataType::UInt64 => {
+
+                    DataType::UInt64 => {
                         let arr = array
                             .as_any()
-                            .downcast_ref::<datafusion::arrow::array::UInt64Array>()
+                            .downcast_ref::<UInt64Array>()
                             .unwrap();
-                        json!(arr.value(row))
+
+                        if arr.is_null(row) {
+                            Value::Null
+                        } else {
+                            json!(arr.value(row))
+                        }
                     }
 
-                    datafusion::arrow::datatypes::DataType::Int64 => {
+                    DataType::Int64 => {
                         let arr = array
                             .as_any()
-                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                            .downcast_ref::<Int64Array>()
                             .unwrap();
-                        json!(arr.value(row))
+
+                        if arr.is_null(row) {
+                            Value::Null
+                        } else {
+                            json!(arr.value(row))
+                        }
                     }
 
-                    datafusion::arrow::datatypes::DataType::Utf8 => {
+                    DataType::Float64 => {
+                        let arr = array
+                            .as_any()
+                            .downcast_ref::<Float64Array>()
+                            .unwrap();
+
+                        if arr.is_null(row) {
+                            Value::Null
+                        } else {
+                            json!(arr.value(row))
+                        }
+                    }
+
+                    DataType::Utf8 => {
                         let arr = array
                             .as_any()
                             .downcast_ref::<StringArray>()
                             .unwrap();
-                        json!(arr.value(row))
+
+                        if arr.is_null(row) {
+                            Value::Null
+                        } else {
+                            json!(arr.value(row))
+                        }
                     }
 
                     _ => Value::Null,
@@ -471,11 +499,11 @@ fn batches_to_json(batches: &[RecordBatch]) -> Value {
                 obj.insert(field.name().clone(), value);
             }
 
-            rows.push(json!(obj));
+            rows.push(Value::Object(obj));
         }
     }
 
-    json!(rows)
+    Value::Array(rows)
 }
 
 // =========== Transactions Table Provider for DataFusion ============
