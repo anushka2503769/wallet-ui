@@ -14,6 +14,7 @@ This project has three pieces:
   - Node.js + npm       https://nodejs.org
   - (Optional, for multi-laptop use) Tailscale
                         https://tailscale.com/download
+  - On Windows, LLVM may be required for RocksDB builds
 
 --------------------------------------------------------------------
 2. BUILD
@@ -34,6 +35,7 @@ For the frontend:
 --------------------------------------------------------------------
 Start the node:
 
+    cd rust-blockchain 
     cargo run --bin blockchain-node
 
 This starts on http://127.0.0.1:8080 using Proof of Work by default.
@@ -54,6 +56,10 @@ Example with PoS:
     cargo run --bin blockchain-node -- --consensus pos
 
 Leave this running in its own terminal.
+
+If there is error "CURRENT file corrupted", remove the ledger.
+Run: 
+    Remove-Item -Recurse -Force ledger
 
 --------------------------------------------------------------------
 4. START THE FRONTEND
